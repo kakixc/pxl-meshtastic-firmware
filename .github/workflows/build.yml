@@ -721,6 +721,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PXL_TAG: ${{ needs.prepare.outputs.pxl_tag }}
           UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+          GH_REPO: ${{ github.repository }}
         run: |
 
           NOTES=$(cat <<EOF
