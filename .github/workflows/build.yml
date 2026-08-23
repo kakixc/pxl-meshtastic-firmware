@@ -1,0 +1,525 @@
+name: Build PXL Meshtastic
+
+on:
+  workflow_dispatch:
+    inputs:
+      meshtastic_tag:
+        description: "Meshtastic tag. Leave empty for latest stable"
+        required: false
+        type: string
+      publish_release:
+        description: "Publish GitHub Release"
+        required: true
+        default: true
+        type: boolean
+
+  schedule:
+    # Проверяем новый stable каждый день
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: write
+
+env:
+  BOARD: heltec-v3
+
+  # Если мы поменяем PXL-фичи, увеличиваем:
+  # pxl.1 -> pxl.2 -> pxl.3 ...
+  PXL_REV: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PXL builder
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      # ---------------------------------------------------------
+      # Resolve upstream Meshtastic version
+      # ---------------------------------------------------------
+
+      - name: Resolve Meshtastic version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_TAG: ${{ inputs.meshtastic_tag }}
+        run: |
+          if [ -n "$MANUAL_TAG" ]; then
+            UPSTREAM_TAG="$MANUAL_TAG"
+          else
+            UPSTREAM_TAG="$(gh api repos/meshtastic/firmware/releases/latest --jq '.tag_name')"
+          fi
+
+          PXL_TAG="${UPSTREAM_TAG}-pxl.${PXL_REV}"
+
+          echo "upstream_tag=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
+          echo "pxl_tag=$PXL_TAG" >> "$GITHUB_OUTPUT"
+
+          echo "Upstream : $UPSTREAM_TAG"
+          echo "PXL build: $PXL_TAG"
+
+      # ---------------------------------------------------------
+      # Do not rebuild an already published version
+      # ---------------------------------------------------------
+
+      - name: Check existing release
+        id: release_check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PXL_TAG: ${{ steps.version.outputs.pxl_tag }}
+        run: |
+          if gh release view "$PXL_TAG" >/dev/null 2>&1; then
+            echo "Release $PXL_TAG already exists."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "New PXL build required."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---------------------------------------------------------
+      # Clone exact official stable
+      # ---------------------------------------------------------
+
+      - name: Clone Meshtastic
+        if: steps.release_check.outputs.skip != 'true'
+        shell: bash
+        env:
+          UPSTREAM_TAG: ${{ steps.version.outputs.upstream_tag }}
+        run: |
+          git clone \
+            --depth 1 \
+            --branch "$UPSTREAM_TAG" \
+            https://github.com/meshtastic/firmware.git firmware
+
+          cd firmware
+          git submodule update --init --recursive
+
+      # ---------------------------------------------------------
+      # Apply PXL patches
+      # ---------------------------------------------------------
+
+      - name: Apply PXL patches
+        if: steps.release_check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("firmware")
+
+
+          # =====================================================
+          # Helpers
+          # =====================================================
+
+          def replace_exact(path, old, new):
+              text = path.read_text(encoding="utf-8")
+
+              count = text.count(old)
+
+              if count != 1:
+                  raise RuntimeError(
+                      f"{path}: expected exactly one occurrence, found {count}\n"
+                      f"Looking for:\n{old}"
+                  )
+
+              path.write_text(
+                  text.replace(old, new, 1),
+                  encoding="utf-8"
+              )
+
+
+          # =====================================================
+          # 1. OLED_RU
+          # =====================================================
+
+          pio = root / "variants/esp32s3/heltec_v3/platformio.ini"
+
+          replace_exact(
+              pio,
+              "  -I variants/esp32s3/heltec_v3\n",
+              "  -I variants/esp32s3/heltec_v3\n"
+              "  -D OLED_RU\n"
+          )
+
+
+          # =====================================================
+          # 2. PXL OEM boot screen
+          #
+          # Meshtastic 2.7.x requires IMAGE_* defines when
+          # USERPREFS_OEM_TEXT is enabled.
+          #
+          # Therefore we use invisible 1x1 image.
+          # =====================================================
+
+          prefs = root / "userPrefs.jsonc"
+
+          text = prefs.read_text(encoding="utf-8")
+
+          replacements = {
+              '// "USERPREFS_OEM_TEXT": "Caterham Car Club",':
+                  '"USERPREFS_OEM_TEXT": "PXL Mesh",',
+
+              '// "USERPREFS_OEM_FONT_SIZE": "0",':
+                  '"USERPREFS_OEM_FONT_SIZE": "0",',
+
+              '// "USERPREFS_OEM_IMAGE_WIDTH": "50",':
+                  '"USERPREFS_OEM_IMAGE_WIDTH": "1",',
+
+              '// "USERPREFS_OEM_IMAGE_HEIGHT": "28",':
+                  '"USERPREFS_OEM_IMAGE_HEIGHT": "1",',
+          }
+
+          for old, new in replacements.items():
+              if old not in text:
+                  raise RuntimeError(
+                      f"userPrefs.jsonc changed upstream; missing:\n{old}"
+                  )
+
+              text = text.replace(old, new, 1)
+
+          # The upstream IMAGE_DATA example is huge.
+          # Replace the whole commented definition with our 1x1 blank bitmap.
+          pattern = re.compile(
+              r'^\s*//\s*"USERPREFS_OEM_IMAGE_DATA":\s*".*?",\s*$',
+              re.MULTILINE
+          )
+
+          matches = list(pattern.finditer(text))
+
+          if len(matches) != 1:
+              raise RuntimeError(
+                  "Could not uniquely locate USERPREFS_OEM_IMAGE_DATA"
+              )
+
+          text = pattern.sub(
+              '  "USERPREFS_OEM_IMAGE_DATA": "{ 0x00 }",',
+              text,
+              count=1
+          )
+
+          prefs.write_text(text, encoding="utf-8")
+
+
+          # =====================================================
+          # 3. Screen.cpp
+          #    - extra frame slot
+          #    - shorter boot timing
+          #    - register PXL STATUS
+          # =====================================================
+
+          screen = root / "src/graphics/Screen.cpp"
+
+          replace_exact(
+              screen,
+              "#define NUM_EXTRA_FRAMES 3",
+              "#define NUM_EXTRA_FRAMES 4"
+          )
+
+          replace_exact(
+              screen,
+              "uint32_t logo_timeout = 5000;",
+              "uint32_t logo_timeout = 2500;"
+          )
+
+          text = screen.read_text(encoding="utf-8")
+
+          marker = """    if (!hiddenFrames.system) {
+              fsi.positions.system = numframes;
+              normalFrames[numframes++] = graphics::DebugRenderer::drawSystemScreen;
+              indicatorIcons.push_back(icon_system);
+          }"""
+
+          pxl_frame = """    // PXL custom status screen
+          normalFrames[numframes++] = graphics::DebugRenderer::drawPxlStatus;
+          indicatorIcons.push_back(icon_system);
+
+          """ + marker
+
+          if text.count(marker) != 1:
+              raise RuntimeError(
+                  "Screen.cpp layout changed: system frame marker not unique"
+              )
+
+          text = text.replace(marker, pxl_frame, 1)
+
+          screen.write_text(text, encoding="utf-8")
+
+
+          # =====================================================
+          # 4. DebugRenderer.h
+          # =====================================================
+
+          header = root / "src/graphics/draw/DebugRenderer.h"
+
+          marker = """// System screen display
+          void drawSystemScreen"""
+
+          replacement = """// PXL custom status screen
+          void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+
+          // System screen display
+          void drawSystemScreen"""
+
+          replace_exact(
+              header,
+              marker,
+              replacement
+          )
+
+
+          # =====================================================
+          # 5. DebugRenderer.cpp
+          # =====================================================
+
+          renderer = root / "src/graphics/draw/DebugRenderer.cpp"
+
+          text = renderer.read_text(encoding="utf-8")
+
+          marker = """// ****************************
+          // *      System Screen       *
+          // ****************************"""
+
+          pxl_status = r'''
+          // ****************************
+          // *      PXL STATUS          *
+          // ****************************
+          void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+          {
+              display->clear();
+              display->setTextAlignment(TEXT_ALIGN_LEFT);
+              display->setFont(FONT_SMALL);
+
+              graphics::drawCommonHeader(display, x, y, "PXL STATUS");
+
+              char line[32];
+
+              if (powerStatus->getHasBattery()) {
+                  snprintf(
+                      line,
+                      sizeof(line),
+                      "BAT %d%%  %.2fV",
+                      powerStatus->getBatteryChargePercent(),
+                      powerStatus->getBatteryVoltageMv() / 1000.0f
+                  );
+              } else {
+                  snprintf(line, sizeof(line), "BAT USB");
+              }
+
+              display->drawString(
+                  x,
+                  getTextPositions(display)[1],
+                  line
+              );
+
+              snprintf(
+                  line,
+                  sizeof(line),
+                  "NODES %d/%d",
+                  nodeStatus->getNumOnline(),
+                  nodeStatus->getNumTotal()
+              );
+
+              display->drawString(
+                  x,
+                  getTextPositions(display)[2],
+                  line
+              );
+
+              snprintf(
+                  line,
+                  sizeof(line),
+                  "CH %.1f%%  AIR %.1f%%",
+                  airTime->channelUtilizationPercent(),
+                  airTime->utilizationTXPercent()
+              );
+
+              display->drawString(
+                  x,
+                  getTextPositions(display)[3],
+                  line
+              );
+
+              auto role =
+                  DisplayFormatters::getDeviceRole(config.device.role);
+
+              snprintf(
+                  line,
+                  sizeof(line),
+                  "ROLE %s",
+                  role
+              );
+
+              display->drawString(
+                  x,
+                  getTextPositions(display)[4],
+                  line
+              );
+
+              graphics::drawCommonFooter(display, x, y);
+          }
+
+          '''
+
+          if text.count(marker) != 1:
+              raise RuntimeError(
+                  "DebugRenderer.cpp layout changed: "
+                  "System Screen marker not unique"
+              )
+
+          text = text.replace(
+              marker,
+              pxl_status + marker,
+              1
+          )
+
+          renderer.write_text(text, encoding="utf-8")
+
+
+          print()
+          print("====================================")
+          print("PXL patches successfully applied")
+          print("====================================")
+          print(" + OLED_RU")
+          print(" + PXL Mesh OEM boot")
+          print(" + 2.5s logo timeout")
+          print(" + PXL STATUS")
+          print(" + NO radio changes")
+          print(" + NO power limit changes")
+          print("====================================")
+          PY
+
+      # ---------------------------------------------------------
+      # Verify exactly what GitHub is about to build
+      # ---------------------------------------------------------
+
+      - name: Show PXL diff
+        if: steps.release_check.outputs.skip != 'true'
+        working-directory: firmware
+        run: |
+          git diff --check
+          git --no-pager diff --stat
+          git --no-pager diff
+
+      # ---------------------------------------------------------
+      # Build
+      # ---------------------------------------------------------
+
+      - name: Build Heltec V3
+        if: steps.release_check.outputs.skip != 'true'
+        working-directory: firmware
+        run: |
+          pio run -e heltec-v3
+
+      # ---------------------------------------------------------
+      # Package ONLY normal update firmware
+      # ---------------------------------------------------------
+
+      - name: Package firmware
+        if: steps.release_check.outputs.skip != 'true'
+        shell: bash
+        env:
+          UPSTREAM_TAG: ${{ steps.version.outputs.upstream_tag }}
+        run: |
+          mkdir -p dist
+
+          FW="firmware/.pio/build/heltec-v3/firmware.bin"
+
+          if [ ! -f "$FW" ]; then
+            echo "ERROR: firmware.bin not found"
+            find firmware/.pio/build/heltec-v3 -maxdepth 1 -type f -print
+            exit 1
+          fi
+
+          OUT="dist/meshtastic-heltec-v3-${UPSTREAM_TAG}-PXL.bin"
+
+          cp "$FW" "$OUT"
+
+          sha256sum "$OUT" > "${OUT}.sha256"
+
+          cat > dist/BUILD.txt <<EOF
+          PXL Meshtastic
+
+          Upstream: ${UPSTREAM_TAG}
+          Board: Heltec V3
+
+          PXL changes:
+          - OLED_RU
+          - PXL Mesh OEM boot
+          - PXL STATUS screen
+          - Shorter boot splash
+
+          Radio changes:
+          - NONE
+
+          Power limit changes:
+          - NONE
+
+          IMPORTANT:
+          This is the normal update firmware.bin.
+          It is NOT factory firmware.
+          EOF
+
+          ls -lah dist
+
+      # ---------------------------------------------------------
+      # Always keep a downloadable Actions artifact
+      # ---------------------------------------------------------
+
+      - name: Upload build artifact
+        if: steps.release_check.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PXL-Meshtastic-${{ steps.version.outputs.upstream_tag }}
+          path: dist/
+          retention-days: 30
+
+      # ---------------------------------------------------------
+      # Publish GitHub Release
+      # Scheduled runs publish automatically.
+      # Manual runs obey publish_release checkbox.
+      # ---------------------------------------------------------
+
+      - name: Publish PXL Release
+        if: >
+          steps.release_check.outputs.skip != 'true' &&
+          (
+            github.event_name == 'schedule' ||
+            inputs.publish_release == true
+          )
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.version.outputs.upstream_tag }}
+          PXL_TAG: ${{ steps.version.outputs.pxl_tag }}
+        run: |
+          gh release create "$PXL_TAG" \
+            dist/* \
+            --title "PXL Meshtastic ${UPSTREAM_TAG}" \
+            --notes "PXL build based on official Meshtastic ${UPSTREAM_TAG}.
+
+          Changes:
+          - OLED_RU
+          - PXL Mesh boot screen
+          - PXL STATUS
+          - shorter boot screen
+
+          Radio stack: unchanged.
+          RU power limit: unchanged.
+          No factory firmware is included.
+
+          Use the .bin as a normal firmware UPDATE without erasing flash."
