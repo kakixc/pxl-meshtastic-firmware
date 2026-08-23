@@ -631,252 +631,252 @@ jobs:
 
 
           pxl_screens = r'''
-// ****************************
-// *      PXL BOOT            *
-// ****************************
-void drawPxlBootScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
-{
-    static uint32_t startedAt = 0;
+          // ****************************
+          // *      PXL BOOT            *
+          // ****************************
+          void drawPxlBootScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+          {
+              static uint32_t startedAt = 0;
 
-    if (startedAt == 0) {
-        startedAt = millis();
-    }
+              if (startedAt == 0) {
+                  startedAt = millis();
+              }
 
-    const uint32_t elapsed = millis() - startedAt;
+              const uint32_t elapsed = millis() - startedAt;
 
-    display->clear();
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
+              display->clear();
+              display->setTextAlignment(TEXT_ALIGN_CENTER);
 
-    const bool compact = SCREEN_HEIGHT <= 64;
+              const bool compact = SCREEN_HEIGHT <= 64;
 
-    const int centerX = x + (SCREEN_WIDTH / 2);
+              const int centerX = x + (SCREEN_WIDTH / 2);
 
-    const int logoY =
-        y + (compact ? 8 : (SCREEN_HEIGHT / 2) - 26);
+              const int logoY =
+                  y + (compact ? 8 : (SCREEN_HEIGHT / 2) - 26);
 
-    const int meshY =
-        y + (compact ? 27 : (SCREEN_HEIGHT / 2) - 4);
+              const int meshY =
+                  y + (compact ? 27 : (SCREEN_HEIGHT / 2) - 4);
 
-    display->setFont(FONT_MEDIUM);
-    display->drawString(
-        centerX,
-        logoY,
-        "PXL"
-    );
+              display->setFont(FONT_MEDIUM);
+              display->drawString(
+                  centerX,
+                  logoY,
+                  "PXL"
+              );
 
-    display->setFont(FONT_SMALL);
-    display->drawString(
-        centerX,
-        meshY,
-        "MESH"
-    );
-
-
-    // Progress bar
-    const int barW = (SCREEN_WIDTH * 2) / 3;
-    const int barH = compact ? 6 : 8;
-
-    const int barX =
-        x + (SCREEN_WIDTH - barW) / 2;
-
-    const int barY =
-        y + SCREEN_HEIGHT - (compact ? 22 : 30);
-
-    const int innerW = barW - 2;
-
-    display->drawRect(
-        barX,
-        barY,
-        barW,
-        barH
-    );
+              display->setFont(FONT_SMALL);
+              display->drawString(
+                  centerX,
+                  meshY,
+                  "MESH"
+              );
 
 
-    // E-Ink gets a static complete bar.
-    // OLED/TFT gets the animation.
-    int fillW = innerW;
+              // Progress bar
+              const int barW = (SCREEN_WIDTH * 2) / 3;
+              const int barH = compact ? 6 : 8;
 
-#ifndef USE_EINK
-    fillW =
-        (elapsed * innerW) / 2400;
+              const int barX =
+                  x + (SCREEN_WIDTH - barW) / 2;
 
-    if (fillW < 0) {
-        fillW = 0;
-    }
+              const int barY =
+                  y + SCREEN_HEIGHT - (compact ? 22 : 30);
 
-    if (fillW > innerW) {
-        fillW = innerW;
-    }
-#endif
+              const int innerW = barW - 2;
 
-    if (fillW > 0) {
-        display->fillRect(
-            barX + 1,
-            barY + 1,
-            fillW,
-            barH - 2
-        );
-    }
+              display->drawRect(
+                  barX,
+                  barY,
+                  barW,
+                  barH
+              );
 
 
-    // Small PXL firmware version
-    display->setFont(FONT_SMALL);
-    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+              // E-Ink gets a static complete bar.
+              // OLED/TFT gets the animation.
+              int fillW = innerW;
 
-    display->drawString(
-        x + SCREEN_WIDTH - 2,
-        y + SCREEN_HEIGHT - (compact ? 12 : 17),
-        "__PXL_VERSION__"
-    );
+          #ifndef USE_EINK
+              fillW =
+                  (elapsed * innerW) / 2400;
 
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
-}
+              if (fillW < 0) {
+                  fillW = 0;
+              }
 
+              if (fillW > innerW) {
+                  fillW = innerW;
+              }
+          #endif
 
-// ****************************
-// *      PXL STATUS          *
-// ****************************
-void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
-{
-    display->clear();
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
-    display->setFont(FONT_SMALL);
-
-    graphics::drawCommonHeader(
-        display,
-        x,
-        y,
-        "PXL STATUS"
-    );
-
-    char line[32];
+              if (fillW > 0) {
+                  display->fillRect(
+                      barX + 1,
+                      barY + 1,
+                      fillW,
+                      barH - 2
+                  );
+              }
 
 
-    // 128x64 displays need extra space below the
-    // common Meshtastic header.
-    const int firstY =
-        (SCREEN_HEIGHT <= 64)
-            ? 17
-            : getTextPositions(display)[1];
+              // Small PXL firmware version
+              display->setFont(FONT_SMALL);
+              display->setTextAlignment(TEXT_ALIGN_RIGHT);
 
-    const int lineStep =
-        (SCREEN_HEIGHT <= 64)
-            ? 9
-            : (FONT_HEIGHT_SMALL + 2);
+              display->drawString(
+                  x + SCREEN_WIDTH - 2,
+                  y + SCREEN_HEIGHT - (compact ? 12 : 17),
+                  "__PXL_VERSION__"
+              );
 
-    int textY = firstY;
-
-
-    // Battery
-    if (powerStatus->getHasBattery()) {
-
-        snprintf(
-            line,
-            sizeof(line),
-            "BAT %d%%  %.2fV",
-            powerStatus->getBatteryChargePercent(),
-            powerStatus->getBatteryVoltageMv()
-                / 1000.0f
-        );
-
-    } else {
-
-        snprintf(
-            line,
-            sizeof(line),
-            "BAT USB"
-        );
-    }
-
-    display->drawString(
-        x,
-        textY,
-        line
-    );
-
-    textY += lineStep;
+              display->setTextAlignment(TEXT_ALIGN_LEFT);
+          }
 
 
-    // Nodes
-    snprintf(
-        line,
-        sizeof(line),
-        "NODES %d/%d",
-        nodeStatus->getNumOnline(),
-        nodeStatus->getNumTotal()
-    );
+          // ****************************
+          // *      PXL STATUS          *
+          // ****************************
+          void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+          {
+              display->clear();
+              display->setTextAlignment(TEXT_ALIGN_LEFT);
+              display->setFont(FONT_SMALL);
 
-    display->drawString(
-        x,
-        textY,
-        line
-    );
+              graphics::drawCommonHeader(
+                  display,
+                  x,
+                  y,
+                  "PXL STATUS"
+              );
 
-    textY += lineStep;
-
-
-    // Channel utilization / own TX airtime
-    snprintf(
-        line,
-        sizeof(line),
-        "CH %.1f%%  TX %.1f%%",
-        airTime->channelUtilizationPercent(),
-        airTime->utilizationTXPercent()
-    );
-
-    display->drawString(
-        x,
-        textY,
-        line
-    );
-
-    textY += lineStep;
+              char line[32];
 
 
-    // Compact device role
-    const char *role =
-        DisplayFormatters::getDeviceRole(
-            config.device.role
-        );
+              // Extra spacing below Meshtastic header
+              const int firstY =
+                  (SCREEN_HEIGHT <= 64)
+                      ? 17
+                      : getTextPositions(display)[1];
 
-    const char *shortRole = role;
+              const int lineStep =
+                  (SCREEN_HEIGHT <= 64)
+                      ? 9
+                      : (FONT_HEIGHT_SMALL + 2);
 
-    if (
-        role != nullptr
-        && strncmp(
-            role,
-            "CLIENT_",
-            7
-        ) == 0
-    ) {
-        shortRole = role + 7;
-    }
-
-    snprintf(
-        line,
-        sizeof(line),
-        "ROLE %s",
-        shortRole != nullptr
-            ? shortRole
-            : "UNKNOWN"
-    );
-
-    display->drawString(
-        x,
-        textY,
-        line
-    );
+              int textY = firstY;
 
 
-    graphics::drawCommonFooter(
-        display,
-        x,
-        y
-    );
-}
+              // Battery
+              if (powerStatus->getHasBattery()) {
+                  snprintf(
+                      line,
+                      sizeof(line),
+                      "BAT %d%%  %.2fV",
+                      powerStatus->getBatteryChargePercent(),
+                      powerStatus->getBatteryVoltageMv() / 1000.0f
+                  );
+              } else {
+                  snprintf(
+                      line,
+                      sizeof(line),
+                      "BAT USB"
+                  );
+              }
+
+              display->drawString(
+                  x,
+                  textY,
+                  line
+              );
+
+              textY += lineStep;
 
 
-'''
+              // Nodes
+              snprintf(
+                  line,
+                  sizeof(line),
+                  "NODES %d/%d",
+                  nodeStatus->getNumOnline(),
+                  nodeStatus->getNumTotal()
+              );
+
+              display->drawString(
+                  x,
+                  textY,
+                  line
+              );
+
+              textY += lineStep;
+
+
+              // Channel utilization / own TX airtime
+              snprintf(
+                  line,
+                  sizeof(line),
+                  "CH %.1f%%  TX %.1f%%",
+                  airTime->channelUtilizationPercent(),
+                  airTime->utilizationTXPercent()
+              );
+
+              display->drawString(
+                  x,
+                  textY,
+                  line
+              );
+
+              textY += lineStep;
+
+
+              // Compact device role
+              const char *role =
+                  DisplayFormatters::getDeviceRole(
+                      config.device.role
+                  );
+
+              const char *shortRole = role;
+
+              if (
+                  role != nullptr
+                  && strncmp(
+                      role,
+                      "CLIENT_",
+                      7
+                  ) == 0
+              ) {
+                  shortRole = role + 7;
+              }
+
+              snprintf(
+                  line,
+                  sizeof(line),
+                  "ROLE %s",
+                  shortRole != nullptr
+                      ? shortRole
+                      : "UNKNOWN"
+              );
+
+              display->drawString(
+                  x,
+                  textY,
+                  line
+              );
+
+
+              graphics::drawCommonFooter(
+                  display,
+                  x,
+                  y
+              );
+          }
+
+
+          '''
+
+          pxl_screens = pxl_screens.replace(
+              "__PXL_VERSION__",
+              f"PXL {PXL_VERSION}"
+          )
 
           pxl_screens = pxl_screens.replace(
               "__PXL_VERSION__",
