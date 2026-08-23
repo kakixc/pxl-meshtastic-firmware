@@ -9,7 +9,7 @@ on:
         type: string
 
       force_rebuild:
-        description: "Rebuild even if PXL release already exists"
+        description: "Rebuild even if the PXL release already exists"
         required: true
         default: false
         type: boolean
@@ -20,15 +20,23 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: pxl-meshtastic-build
+  cancel-in-progress: false
+
 env:
-  PXL_REV: "1"
+  PXL_VERSION: "0.2"
+  PXL_REV: "2"
+
 
 jobs:
+
   # ============================================================
-  # Find latest official stable Meshtastic release
+  # Resolve upstream release
   # ============================================================
 
   prepare:
+    name: Resolve upstream
     runs-on: ubuntu-latest
 
     outputs:
@@ -37,6 +45,7 @@ jobs:
       skip: ${{ steps.check.outputs.skip }}
 
     steps:
+
       - name: Resolve Meshtastic version
         id: version
         shell: bash
@@ -44,10 +53,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MANUAL_TAG: ${{ inputs.meshtastic_tag }}
         run: |
-          if [ -n "$MANUAL_TAG" ]; then
+          set -euo pipefail
+
+          if [ -n "${MANUAL_TAG:-}" ]; then
             UPSTREAM_TAG="$MANUAL_TAG"
           else
-            UPSTREAM_TAG="$(gh api repos/meshtastic/firmware/releases/latest --jq '.tag_name')"
+            UPSTREAM_TAG="$(
+              gh api \
+                repos/meshtastic/firmware/releases/latest \
+                --jq '.tag_name'
+            )"
           fi
 
           PXL_TAG="${UPSTREAM_TAG}-PXL.${PXL_REV}"
@@ -55,42 +70,51 @@ jobs:
           echo "upstream_tag=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
           echo "pxl_tag=$PXL_TAG" >> "$GITHUB_OUTPUT"
 
-          echo "Official Meshtastic: $UPSTREAM_TAG"
-          echo "PXL release:        $PXL_TAG"
+          echo "Upstream:    $UPSTREAM_TAG"
+          echo "PXL version: $PXL_VERSION"
+          echo "PXL release: $PXL_TAG"
+
 
       - name: Check existing PXL release
         id: check
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PXL_TAG: ${{ steps.version.outputs.pxl_tag }}
-          FORCE: ${{ inputs.force_rebuild }}
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
         run: |
-          if [ "$FORCE" = "true" ]; then
-            echo "Force rebuild requested."
+          set -euo pipefail
+
+          if [ "${FORCE_REBUILD:-false}" = "true" ]; then
+            echo "Force rebuild enabled."
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if gh release view "$PXL_TAG" >/dev/null 2>&1; then
-            echo "Release $PXL_TAG already exists."
+            echo "Release already exists: $PXL_TAG"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "New PXL build required."
+            echo "New PXL release required."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
 
   # ============================================================
-  # Build all boards
+  # Build
   # ============================================================
 
   build:
-    needs: prepare
+    name: Build ${{ matrix.display_name }}
+
+    needs:
+      - prepare
 
     if: needs.prepare.outputs.skip != 'true'
 
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
@@ -99,37 +123,38 @@ jobs:
         include:
 
           - board: tlora-t3s3-v1
-            display_name: "LilyGo T3S3"
+            display_name: LilyGo T3S3
             extension: bin
 
           - board: tlora-t3s3-epaper
-            display_name: "LilyGo T3S3 E-Paper"
+            display_name: LilyGo T3S3 E-Paper
             extension: bin
 
           - board: tlora-t3s3-epaper-inkhud
-            display_name: "LilyGo T3S3 E-Paper InkHUD"
+            display_name: LilyGo T3S3 E-Paper InkHUD
             extension: bin
 
           - board: heltec-v4
-            display_name: "Heltec V4"
+            display_name: Heltec V4
             extension: bin
 
           - board: heltec-v3
-            display_name: "Heltec V3"
+            display_name: Heltec V3
             extension: bin
 
           - board: heltec-mesh-node-t114
-            display_name: "Heltec Mesh Node T114"
+            display_name: Heltec Mesh Node T114
             extension: uf2
 
           - board: heltec-mesh-node-t096
-            display_name: "Heltec Mesh Node T096"
+            display_name: Heltec Mesh Node T096
             extension: uf2
+
 
     steps:
 
       # --------------------------------------------------------
-      # Tools
+      # Toolchain
       # --------------------------------------------------------
 
       - name: Setup Python
@@ -137,14 +162,17 @@ jobs:
         with:
           python-version: "3.12"
 
+
       - name: Install PlatformIO
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install platformio
+          python -m pip install platformio
 
 
       # --------------------------------------------------------
-      # Clone EXACT official release
+      # Exact upstream source
       # --------------------------------------------------------
 
       - name: Clone Meshtastic
@@ -152,40 +180,51 @@ jobs:
         env:
           UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
         run: |
-          echo "Cloning official Meshtastic $UPSTREAM_TAG"
+          set -euo pipefail
+
+          echo "Cloning Meshtastic $UPSTREAM_TAG"
 
           git clone \
             --depth 1 \
             --branch "$UPSTREAM_TAG" \
-            https://github.com/meshtastic/firmware.git firmware
+            https://github.com/meshtastic/firmware.git \
+            firmware
 
           cd firmware
-          git submodule update --init --recursive
+
+          git submodule update \
+            --init \
+            --recursive
 
 
       # --------------------------------------------------------
-      # Apply PXL customizations
+      # PXL patches
       # --------------------------------------------------------
 
-      - name: Apply PXL patches
+      - name: Apply PXL 0.2 patches
         shell: bash
         run: |
+          set -euo pipefail
+
           python3 <<'PY'
           from pathlib import Path
+          import os
           import re
 
-          root = Path("firmware")
+
+          ROOT = Path("firmware")
+          PXL_VERSION = os.environ.get("PXL_VERSION", "0.2")
 
 
           # ====================================================
           # Helpers
           # ====================================================
 
-          def read(path):
+          def read(path: Path) -> str:
               return path.read_text(encoding="utf-8")
 
 
-          def write(path, text):
+          def write(path: Path, text: str) -> None:
               path.write_text(text, encoding="utf-8")
 
 
@@ -195,97 +234,166 @@ jobs:
 
               if len(matches) != 1:
                   raise RuntimeError(
-                      f"{name}: expected exactly 1 match, "
+                      f"{name}: expected exactly one match, "
                       f"found {len(matches)}"
                   )
 
-              return regex, matches[0]
+              return matches[0]
 
 
-          # ====================================================
-          # 1. OEM / PXL BOOT SCREEN
-          # ====================================================
-
-          prefs = root / "userPrefs.jsonc"
-          text = read(prefs)
-
-          prefs_values = {
-              "USERPREFS_OEM_TEXT":
-                  '"PXL Mesh"',
-
-              "USERPREFS_OEM_FONT_SIZE":
-                  '"0"',
-
-              # Meshtastic 2.7.x expects image defines whenever
-              # OEM_TEXT is enabled.
-              # 1x1 blank image = essentially invisible.
-              "USERPREFS_OEM_IMAGE_WIDTH":
-                  '"1"',
-
-              "USERPREFS_OEM_IMAGE_HEIGHT":
-                  '"1"',
-
-              "USERPREFS_OEM_IMAGE_DATA":
-                  '"{ 0x00 }"',
-          }
-
-
-          for key, value in prefs_values.items():
-
+          def set_jsonc_pref(text, key, value):
               pattern = re.compile(
                   rf'(?m)^'
-                  rf'(?P<indent>\s*)'
-                  rf'(?://\s*)?'
+                  rf'(?P<indent>[ \t]*)'
+                  rf'(?://[ \t]*)?'
                   rf'"{re.escape(key)}"'
-                  rf'\s*:\s*'
+                  rf'[ \t]*:[ \t]*'
                   rf'.*?,'
-                  rf'\s*$'
+                  rf'[ \t]*$'
               )
 
               matches = list(pattern.finditer(text))
 
               if len(matches) != 1:
                   raise RuntimeError(
-                      f"userPrefs.jsonc: "
-                      f"could not uniquely find {key}; "
-                      f"matches={len(matches)}"
+                      f"userPrefs.jsonc: {key}: "
+                      f"expected exactly one match, "
+                      f"found {len(matches)}"
                   )
 
-              indent = matches[0].group("indent")
+              match = matches[0]
+              indent = match.group("indent")
 
               replacement = (
                   f'{indent}"{key}": {value},'
               )
 
-              text = (
-                  text[:matches[0].start()]
+              return (
+                  text[:match.start()]
                   + replacement
-                  + text[matches[0].end():]
+                  + text[match.end():]
               )
 
-          write(prefs, text)
+
+          # ====================================================
+          # 1. userPrefs.jsonc
+          #
+          # OEM trigger + blank OEM bitmap + OLED_RU
+          # ====================================================
+
+          prefs_path = ROOT / "userPrefs.jsonc"
+          prefs = read(prefs_path)
+
+          prefs = set_jsonc_pref(
+              prefs,
+              "USERPREFS_OEM_TEXT",
+              '"PXL Mesh"'
+          )
+
+          prefs = set_jsonc_pref(
+              prefs,
+              "USERPREFS_OEM_FONT_SIZE",
+              '"0"'
+          )
+
+          prefs = set_jsonc_pref(
+              prefs,
+              "USERPREFS_OEM_IMAGE_WIDTH",
+              '"1"'
+          )
+
+          prefs = set_jsonc_pref(
+              prefs,
+              "USERPREFS_OEM_IMAGE_HEIGHT",
+              '"1"'
+          )
+
+          prefs = set_jsonc_pref(
+              prefs,
+              "USERPREFS_OEM_IMAGE_DATA",
+              '"{ 0x00 }"'
+          )
+
+
+          # OLED_RU is not present in the stock userPrefs file.
+          # userPrefs keys become compiler definitions, so this gives:
+          #
+          #   -DOLED_RU=true
+          #
+          # for every target in the matrix.
+
+          oled_pattern = re.compile(
+              r'(?m)^'
+              r'(?P<indent>[ \t]*)'
+              r'(?://[ \t]*)?'
+              r'"OLED_RU"'
+              r'[ \t]*:[ \t]*'
+              r'.*?,'
+              r'[ \t]*$'
+          )
+
+          oled_matches = list(oled_pattern.finditer(prefs))
+
+          if len(oled_matches) == 1:
+              match = oled_matches[0]
+
+              prefs = (
+                  prefs[:match.start()]
+                  + f'{match.group("indent")}"OLED_RU": "true",'
+                  + prefs[match.end():]
+              )
+
+          elif len(oled_matches) == 0:
+
+              marker = find_one(
+                  r'(?m)^'
+                  r'(?P<indent>[ \t]*)'
+                  r'"USERPREFS_OEM_IMAGE_DATA"'
+                  r'[ \t]*:[ \t]*'
+                  r'.*?,'
+                  r'[ \t]*$',
+                  prefs,
+                  "OEM image data preference"
+              )
+
+              indent = marker.group("indent")
+
+              prefs = (
+                  prefs[:marker.end()]
+                  + "\n"
+                  + f'{indent}"OLED_RU": "true",'
+                  + prefs[marker.end():]
+              )
+
+          else:
+              raise RuntimeError(
+                  "userPrefs.jsonc: OLED_RU is not unique"
+              )
+
+
+          write(prefs_path, prefs)
 
 
           # ====================================================
           # 2. Screen.cpp
-          #
-          # - +1 static frame capacity
-          # - shorter boot splash
-          # - PXL STATUS frame
           # ====================================================
 
-          screen = root / "src/graphics/Screen.cpp"
-          text = read(screen)
+          screen_path = ROOT / "src/graphics/Screen.cpp"
+          screen = read(screen_path)
 
 
-          # -------- NUM_EXTRA_FRAMES --------
+          # ----------------------------------------------------
+          # Extra static frame capacity
+          # ----------------------------------------------------
 
-          regex, match = find_one(
+          match = find_one(
               r'(?m)^'
-              r'(?P<prefix>\s*#define\s+NUM_EXTRA_FRAMES\s+)'
+              r'(?P<prefix>[ \t]*'
+              r'#define[ \t]+'
+              r'NUM_EXTRA_FRAMES[ \t]+)'
               r'(?P<count>\d+)'
               r'(?P<rest>.*)$',
-              text,
+              screen,
               "NUM_EXTRA_FRAMES"
           )
 
@@ -298,10 +406,10 @@ jobs:
               + match.group("rest")
           )
 
-          text = (
-              text[:match.start()]
+          screen = (
+              screen[:match.start()]
               + replacement
-              + text[match.end():]
+              + screen[match.end():]
           )
 
           print(
@@ -310,34 +418,109 @@ jobs:
           )
 
 
-          # -------- Boot timeout --------
+          # ----------------------------------------------------
+          # Shorter boot
+          # ----------------------------------------------------
 
-          regex, match = find_one(
-              r'uint32_t\s+logo_timeout\s*=\s*\d+\s*;',
-              text,
+          match = find_one(
+              r'(?m)^'
+              r'(?P<indent>[ \t]*)'
+              r'uint32_t[ \t]+'
+              r'logo_timeout'
+              r'[ \t]*=[ \t]*'
+              r'\d+'
+              r'[ \t]*;'
+              r'.*$',
+              screen,
               "logo_timeout"
           )
 
-          text = (
-              text[:match.start()]
-              + "uint32_t logo_timeout = 2500;"
-              + text[match.end():]
+          screen = (
+              screen[:match.start()]
+              + match.group("indent")
+              + "uint32_t logo_timeout = 2500; "
+              + "// PXL: ~2.5s stock + ~2.5s OEM stage"
+              + screen[match.end():]
           )
 
 
-          # -------- Insert PXL frame --------
-          #
-          # IMPORTANT:
-          # We only search the BEGINNING of the system frame.
-          # No brittle multiline whitespace matching anymore.
-          #
+          # ----------------------------------------------------
+          # Replace stock OEM frame with PXL boot
+          # ----------------------------------------------------
 
-          regex, match = find_one(
+          match = find_one(
+              r'static[ \t]+'
+              r'FrameCallback[ \t]+'
+              r'bootOEMFrames\[\]'
+              r'[ \t]*=[ \t]*'
+              r'\{'
+              r'graphics::UIRenderer::drawOEMBootScreen'
+              r'\}'
+              r'[ \t]*;',
+              screen,
+              "OEM boot callback"
+          )
+
+          screen = (
+              screen[:match.start()]
+              + "static FrameCallback bootOEMFrames[] = "
+              + "{graphics::DebugRenderer::drawPxlBootScreen};"
+              + screen[match.end():]
+          )
+
+
+          # ----------------------------------------------------
+          # Smooth boot animation on non-EInk displays
+          # ----------------------------------------------------
+
+          match = find_one(
               r'(?m)^'
               r'(?P<indent>[ \t]*)'
-              r'if\s*\(\s*!hiddenFrames\.system\s*\)\s*\{',
-              text,
-              "system frame"
+              r'uint32_t[ \t]+'
+              r'desiredFramerate'
+              r'[ \t]*=[ \t]*'
+              r'IDLE_FRAMERATE'
+              r'[ \t]*;'
+              r'[ \t]*$',
+              screen,
+              "desiredFramerate"
+          )
+
+          fps_patch = (
+              match.group(0)
+              + "\n\n"
+              + "#if defined(USERPREFS_OEM_TEXT) "
+                "&& !defined(USE_EINK)\n"
+              + "    // Smooth PXL boot animation only "
+                "while the OEM boot stage is active.\n"
+              + "    if (showingBootScreen "
+                "&& !showingOEMBootScreen) {\n"
+              + "        desiredFramerate = 12;\n"
+              + "    }\n"
+              + "#endif"
+          )
+
+          screen = (
+              screen[:match.start()]
+              + fps_patch
+              + screen[match.end():]
+          )
+
+
+          # ----------------------------------------------------
+          # Add PXL STATUS to normal frames
+          # ----------------------------------------------------
+
+          match = find_one(
+              r'(?m)^'
+              r'(?P<indent>[ \t]*)'
+              r'if[ \t]*'
+              r'\([ \t]*'
+              r'!hiddenFrames\.system'
+              r'[ \t]*\)'
+              r'[ \t]*\{',
+              screen,
+              "system frame insertion point"
           )
 
           indent = match.group("indent")
@@ -350,34 +533,45 @@ jobs:
               f"\n"
           )
 
-          text = (
-              text[:match.start()]
+          screen = (
+              screen[:match.start()]
               + pxl_frame
-              + text[match.start():]
+              + screen[match.start():]
           )
 
-          write(screen, text)
+
+          write(screen_path, screen)
 
 
           # ====================================================
           # 3. DebugRenderer.h
           # ====================================================
 
-          header = root / "src/graphics/draw/DebugRenderer.h"
-          text = read(header)
+          header_path = (
+              ROOT
+              / "src/graphics/draw/DebugRenderer.h"
+          )
 
-          regex, match = find_one(
+          header = read(header_path)
+
+          match = find_one(
               r'(?m)^'
               r'(?P<indent>[ \t]*)'
-              r'void\s+drawSystemScreen\s*\(',
-              text,
+              r'void[ \t]+'
+              r'drawSystemScreen'
+              r'[ \t]*\(',
+              header,
               "drawSystemScreen declaration"
           )
 
           indent = match.group("indent")
 
-          declaration = (
-              f"{indent}// PXL custom status screen\n"
+          declarations = (
+              f"{indent}// PXL custom screens\n"
+              f"{indent}void drawPxlBootScreen("
+              f"OLEDDisplay *display, "
+              f"OLEDDisplayUiState *state, "
+              f"int16_t x, int16_t y);\n"
               f"{indent}void drawPxlStatus("
               f"OLEDDisplay *display, "
               f"OLEDDisplayUiState *state, "
@@ -385,212 +579,426 @@ jobs:
               f"\n"
           )
 
-          text = (
-              text[:match.start()]
-              + declaration
-              + text[match.start():]
+          header = (
+              header[:match.start()]
+              + declarations
+              + header[match.start():]
           )
 
-          write(header, text)
+          write(header_path, header)
 
 
           # ====================================================
           # 4. DebugRenderer.cpp
           # ====================================================
 
-          renderer = (
-              root
+          renderer_path = (
+              ROOT
               / "src/graphics/draw/DebugRenderer.cpp"
           )
 
-          text = read(renderer)
+          renderer = read(renderer_path)
 
-          regex, match = find_one(
+
+          # strncmp used for compact CLIENT_* role names.
+
+          if "#include <cstring>" not in renderer:
+
+              include_match = find_one(
+                  r'(?m)^'
+                  r'#include[ \t]+'
+                  r'<target_specific\.h>'
+                  r'[ \t]*$',
+                  renderer,
+                  "target_specific include"
+              )
+
+              renderer = (
+                  renderer[:include_match.start()]
+                  + "#include <cstring>\n"
+                  + renderer[include_match.start():]
+              )
+
+
+          match = find_one(
               r'(?m)^'
-              r'(?P<indent>[ \t]*)'
-              r'void\s+drawSystemScreen\s*\(',
-              text,
+              r'void[ \t]+'
+              r'drawSystemScreen'
+              r'[ \t]*\(',
+              renderer,
               "drawSystemScreen implementation"
           )
 
 
-          pxl_status = r'''
-          // ****************************
-          // *      PXL STATUS          *
-          // ****************************
-          void drawPxlStatus(
-              OLEDDisplay *display,
-              OLEDDisplayUiState *state,
-              int16_t x,
-              int16_t y)
-          {
-              display->clear();
-              display->setTextAlignment(TEXT_ALIGN_LEFT);
-              display->setFont(FONT_SMALL);
+          pxl_screens = r'''
+// ****************************
+// *      PXL BOOT            *
+// ****************************
+void drawPxlBootScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    static uint32_t startedAt = 0;
 
-              graphics::drawCommonHeader(
-                  display,
-                  x,
-                  y,
-                  "PXL STATUS"
-              );
+    if (startedAt == 0) {
+        startedAt = millis();
+    }
 
-              char line[32];
+    const uint32_t elapsed = millis() - startedAt;
 
+    display->clear();
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
 
-              // Battery
-              if (powerStatus->getHasBattery()) {
+    const bool compact = SCREEN_HEIGHT <= 64;
 
-                  snprintf(
-                      line,
-                      sizeof(line),
-                      "BAT %d%%  %.2fV",
-                      powerStatus
-                          ->getBatteryChargePercent(),
-                      powerStatus
-                          ->getBatteryVoltageMv()
-                          / 1000.0f
-                  );
+    const int centerX = x + (SCREEN_WIDTH / 2);
 
-              } else {
+    const int logoY =
+        y + (compact ? 8 : (SCREEN_HEIGHT / 2) - 26);
 
-                  snprintf(
-                      line,
-                      sizeof(line),
-                      "BAT USB"
-                  );
-              }
+    const int meshY =
+        y + (compact ? 27 : (SCREEN_HEIGHT / 2) - 4);
 
-              display->drawString(
-                  x,
-                  getTextPositions(display)[1],
-                  line
-              );
+    display->setFont(FONT_MEDIUM);
+    display->drawString(
+        centerX,
+        logoY,
+        "PXL"
+    );
+
+    display->setFont(FONT_SMALL);
+    display->drawString(
+        centerX,
+        meshY,
+        "MESH"
+    );
 
 
-              // Nodes
-              snprintf(
-                  line,
-                  sizeof(line),
-                  "NODES %d/%d",
-                  nodeStatus->getNumOnline(),
-                  nodeStatus->getNumTotal()
-              );
+    // Progress bar
+    const int barW = (SCREEN_WIDTH * 2) / 3;
+    const int barH = compact ? 6 : 8;
 
-              display->drawString(
-                  x,
-                  getTextPositions(display)[2],
-                  line
-              );
+    const int barX =
+        x + (SCREEN_WIDTH - barW) / 2;
 
+    const int barY =
+        y + SCREEN_HEIGHT - (compact ? 22 : 30);
 
-              // Airtime
-              snprintf(
-                  line,
-                  sizeof(line),
-                  "CH %.1f%%  AIR %.1f%%",
-                  airTime
-                      ->channelUtilizationPercent(),
-                  airTime
-                      ->utilizationTXPercent()
-              );
+    const int innerW = barW - 2;
 
-              display->drawString(
-                  x,
-                  getTextPositions(display)[3],
-                  line
-              );
+    display->drawRect(
+        barX,
+        barY,
+        barW,
+        barH
+    );
 
 
-              // Device role
-              auto role =
-                  DisplayFormatters
-                      ::getDeviceRole(
-                          config.device.role
-                      );
+    // E-Ink gets a static complete bar.
+    // OLED/TFT gets the animation.
+    int fillW = innerW;
 
-              snprintf(
-                  line,
-                  sizeof(line),
-                  "ROLE %s",
-                  role
-              );
+#ifndef USE_EINK
+    fillW =
+        (elapsed * innerW) / 2400;
 
-              display->drawString(
-                  x,
-                  getTextPositions(display)[4],
-                  line
-              );
+    if (fillW < 0) {
+        fillW = 0;
+    }
 
-              graphics::drawCommonFooter(
-                  display,
-                  x,
-                  y
-              );
+    if (fillW > innerW) {
+        fillW = innerW;
+    }
+#endif
+
+    if (fillW > 0) {
+        display->fillRect(
+            barX + 1,
+            barY + 1,
+            fillW,
+            barH - 2
+        );
+    }
+
+
+    // Small PXL firmware version
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+
+    display->drawString(
+        x + SCREEN_WIDTH - 2,
+        y + SCREEN_HEIGHT - (compact ? 12 : 17),
+        "__PXL_VERSION__"
+    );
+
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+}
+
+
+// ****************************
+// *      PXL STATUS          *
+// ****************************
+void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    display->clear();
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->setFont(FONT_SMALL);
+
+    graphics::drawCommonHeader(
+        display,
+        x,
+        y,
+        "PXL STATUS"
+    );
+
+    char line[32];
+
+
+    // 128x64 displays need extra space below the
+    // common Meshtastic header.
+    const int firstY =
+        (SCREEN_HEIGHT <= 64)
+            ? 17
+            : getTextPositions(display)[1];
+
+    const int lineStep =
+        (SCREEN_HEIGHT <= 64)
+            ? 9
+            : (FONT_HEIGHT_SMALL + 2);
+
+    int textY = firstY;
+
+
+    // Battery
+    if (powerStatus->getHasBattery()) {
+
+        snprintf(
+            line,
+            sizeof(line),
+            "BAT %d%%  %.2fV",
+            powerStatus->getBatteryChargePercent(),
+            powerStatus->getBatteryVoltageMv()
+                / 1000.0f
+        );
+
+    } else {
+
+        snprintf(
+            line,
+            sizeof(line),
+            "BAT USB"
+        );
+    }
+
+    display->drawString(
+        x,
+        textY,
+        line
+    );
+
+    textY += lineStep;
+
+
+    // Nodes
+    snprintf(
+        line,
+        sizeof(line),
+        "NODES %d/%d",
+        nodeStatus->getNumOnline(),
+        nodeStatus->getNumTotal()
+    );
+
+    display->drawString(
+        x,
+        textY,
+        line
+    );
+
+    textY += lineStep;
+
+
+    // Channel utilization / own TX airtime
+    snprintf(
+        line,
+        sizeof(line),
+        "CH %.1f%%  TX %.1f%%",
+        airTime->channelUtilizationPercent(),
+        airTime->utilizationTXPercent()
+    );
+
+    display->drawString(
+        x,
+        textY,
+        line
+    );
+
+    textY += lineStep;
+
+
+    // Compact device role
+    const char *role =
+        DisplayFormatters::getDeviceRole(
+            config.device.role
+        );
+
+    const char *shortRole = role;
+
+    if (
+        role != nullptr
+        && strncmp(
+            role,
+            "CLIENT_",
+            7
+        ) == 0
+    ) {
+        shortRole = role + 7;
+    }
+
+    snprintf(
+        line,
+        sizeof(line),
+        "ROLE %s",
+        shortRole != nullptr
+            ? shortRole
+            : "UNKNOWN"
+    );
+
+    display->drawString(
+        x,
+        textY,
+        line
+    );
+
+
+    graphics::drawCommonFooter(
+        display,
+        x,
+        y
+    );
+}
+
+
+'''
+
+          pxl_screens = pxl_screens.replace(
+              "__PXL_VERSION__",
+              f"PXL {PXL_VERSION}"
+          )
+
+
+          renderer = (
+              renderer[:match.start()]
+              + pxl_screens
+              + renderer[match.start():]
+          )
+
+          write(renderer_path, renderer)
+
+
+          # ====================================================
+          # Verification
+          # ====================================================
+
+          required_strings = {
+              "PXL boot callback":
+                  "DebugRenderer::drawPxlBootScreen",
+
+              "PXL status callback":
+                  "DebugRenderer::drawPxlStatus",
+
+              "PXL boot renderer":
+                  "void drawPxlBootScreen",
+
+              "PXL status renderer":
+                  "void drawPxlStatus",
+
+              "OLED RU":
+                  '"OLED_RU": "true"',
+
+              "PXL OEM":
+                  '"USERPREFS_OEM_TEXT": "PXL Mesh"',
           }
 
 
-          '''
-
-          text = (
-              text[:match.start()]
-              + pxl_status
-              + text[match.start():]
+          combined = (
+              read(screen_path)
+              + read(header_path)
+              + read(renderer_path)
+              + read(prefs_path)
           )
 
-          write(renderer, text)
 
+          for name, value in required_strings.items():
+              if value not in combined:
+                  raise RuntimeError(
+                      f"Verification failed: {name}"
+                  )
 
-          # ====================================================
-          # DONE
-          # ====================================================
 
           print()
-          print("=================================")
-          print("PXL patches applied")
-          print("=================================")
-          print("+ PXL Mesh OEM boot")
+          print("========================================")
+          print(f"PXL Meshtastic {PXL_VERSION}")
+          print("========================================")
+          print("+ OLED_RU")
+          print("+ PXL animated boot")
+          print("+ PXL version branding")
           print("+ PXL STATUS")
-          print("+ shorter boot splash")
+          print("+ compact role display")
+          print("+ shorter boot")
+          print("+ E-Ink safe static boot")
           print("+ radio stack unchanged")
-          print("+ power limit unchanged")
-          print("=================================")
-
+          print("+ regional limits unchanged")
+          print("+ power limits unchanged")
+          print("========================================")
           PY
 
 
       # --------------------------------------------------------
-      # Verify patch
+      # Validate generated source
       # --------------------------------------------------------
 
-      - name: Show PXL diff
+      - name: Validate PXL diff
         working-directory: firmware
+        shell: bash
         run: |
+          set -euo pipefail
+
           git diff --check
+
+          echo
+          echo "===== DIFF STAT ====="
           git --no-pager diff --stat
-          git --no-pager diff
+
+          echo
+          echo "===== PXL REFERENCES ====="
+
+          grep -R \
+            --line-number \
+            --exclude-dir=.pio \
+            "PXL" \
+            src/graphics \
+            userPrefs.jsonc \
+            | head -n 100
 
 
       # --------------------------------------------------------
       # Build
-      #
-      # Official Meshtastic build system reads OLED_RU from PREFS.
       # --------------------------------------------------------
 
       - name: Build ${{ matrix.display_name }}
         working-directory: firmware
         shell: bash
-        env:
-          PREFS: "OLED_RU"
         run: |
-          echo "Building ${{ matrix.board }}"
-          echo "PREFS=$PREFS"
+          set -euo pipefail
 
-          pio run -e "${{ matrix.board }}"
+          echo "Target: ${{ matrix.board }}"
+          echo "PXL:    $PXL_VERSION"
+          echo
+
+          python -m platformio run \
+            -e "${{ matrix.board }}"
 
 
       # --------------------------------------------------------
-      # Package board firmware
+      # Package
       # --------------------------------------------------------
 
       - name: Package firmware
@@ -600,80 +1008,155 @@ jobs:
           EXT: ${{ matrix.extension }}
           UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
         run: |
+          set -euo pipefail
+
           mkdir -p dist
 
           BUILD_DIR="firmware/.pio/build/$BOARD"
 
-          if [ "$EXT" = "uf2" ]; then
-            SOURCE="$BUILD_DIR/firmware.uf2"
-          else
-            SOURCE="$BUILD_DIR/firmware.bin"
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "Build directory does not exist:"
+            echo "$BUILD_DIR"
+            exit 1
           fi
 
-          if [ ! -f "$SOURCE" ]; then
 
-            echo "Expected $SOURCE was not found."
-            echo "Trying to locate firmware *.$EXT..."
+          # ====================================================
+          # Find UPDATE image
+          # ====================================================
 
-            SOURCE="$(
+          UPDATE="$(
+            find "$BUILD_DIR" \
+              -maxdepth 1 \
+              -type f \
+              -name "firmware-${BOARD}-*.${EXT}" \
+              ! -name "*.factory.${EXT}" \
+              | sort \
+              | head -n 1
+          )"
+
+
+          # Fallback for targets using generic firmware filename.
+
+          if [ -z "$UPDATE" ]; then
+            UPDATE="$(
               find "$BUILD_DIR" \
                 -maxdepth 1 \
                 -type f \
-                -name "firmware*.$EXT" \
+                -name "firmware*.${EXT}" \
+                ! -name "*.factory.${EXT}" \
+                | sort \
                 | head -n 1
             )"
           fi
 
 
-          if [ -z "$SOURCE" ] || [ ! -f "$SOURCE" ]; then
-            echo "ERROR: firmware file not found"
+          if [ -z "$UPDATE" ] || [ ! -f "$UPDATE" ]; then
+            echo "ERROR: update firmware was not found."
+            echo
             find "$BUILD_DIR" -maxdepth 1 -type f -print
             exit 1
           fi
 
 
-          OUT="dist/meshtastic-${BOARD}-${UPSTREAM_TAG}-PXL.${PXL_REV}.${EXT}"
+          UPDATE_OUT="dist/meshtastic-${BOARD}-${UPSTREAM_TAG}-PXL.${PXL_REV}-update.${EXT}"
 
-          cp "$SOURCE" "$OUT"
+          cp \
+            "$UPDATE" \
+            "$UPDATE_OUT"
 
-          sha256sum "$OUT" > "$OUT.sha256"
 
+          # ====================================================
+          # Find FACTORY image
+          # ====================================================
+
+          FACTORY="$(
+            find "$BUILD_DIR" \
+              -maxdepth 1 \
+              -type f \
+              -name "*.factory.${EXT}" \
+              | sort \
+              | head -n 1
+          )"
+
+
+          if [ -n "$FACTORY" ] && [ -f "$FACTORY" ]; then
+
+            FACTORY_OUT="dist/meshtastic-${BOARD}-${UPSTREAM_TAG}-PXL.${PXL_REV}-factory.${EXT}"
+
+            cp \
+              "$FACTORY" \
+              "$FACTORY_OUT"
+
+            echo "Factory image found."
+
+          else
+
+            echo "No factory .$EXT generated for $BOARD."
+          fi
+
+
+          # ====================================================
+          # Checksums
+          # ====================================================
+
+          for fw in dist/*.${EXT}; do
+            [ -e "$fw" ] || continue
+
+            sha256sum "$fw" \
+              > "${fw}.sha256"
+          done
+
+
+          # ====================================================
+          # Build metadata
+          # ====================================================
 
           cat > "dist/${BOARD}-BUILD.txt" <<EOF
-          PXL Meshtastic
+          PXL Meshtastic Firmware
 
-          Upstream:
-          ${UPSTREAM_TAG}
-
-          Board:
-          ${BOARD}
+          PXL version:
+          ${PXL_VERSION}
 
           PXL revision:
           ${PXL_REV}
 
-          Customizations:
+          Upstream Meshtastic:
+          ${UPSTREAM_TAG}
+
+          PlatformIO target:
+          ${BOARD}
+
+          Changes:
           - OLED_RU
-          - PXL Mesh OEM boot screen
+          - PXL animated boot on non-EInk displays
+          - PXL static boot on E-Ink displays
+          - PXL firmware version branding
           - PXL STATUS
-          - shorter boot splash
+          - shorter boot stage
 
-          Radio stack:
-          UNCHANGED
+          Unchanged:
+          - LoRa protocol
+          - routing
+          - region limits
+          - TX power limits
+          - radio stack
 
-          Region power limits:
-          UNCHANGED
+          Recommended image for existing configured devices:
+          *-update.${EXT}
 
-          This file is NOT factory firmware.
+          Factory image:
+          published only when generated by the upstream target.
           EOF
 
 
           echo
-          echo "Produced:"
+          echo "===== PACKAGED FILES ====="
           ls -lah dist
 
 
       # --------------------------------------------------------
-      # Upload per-board artifact
+      # Artifact
       # --------------------------------------------------------
 
       - name: Upload ${{ matrix.display_name }}
@@ -682,13 +1165,16 @@ jobs:
           name: pxl-${{ matrix.board }}
           path: dist/
           retention-days: 30
+          if-no-files-found: error
 
 
   # ============================================================
-  # One release containing ALL boards
+  # Release
   # ============================================================
 
   release:
+    name: Publish release
+
     needs:
       - prepare
       - build
@@ -701,7 +1187,7 @@ jobs:
 
     steps:
 
-      - name: Download all builds
+      - name: Download all board artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: pxl-*
@@ -709,44 +1195,69 @@ jobs:
           merge-multiple: true
 
 
-      - name: Show release files
+      - name: Inspect release files
+        shell: bash
         run: |
-          find dist -maxdepth 1 -type f -print
+          set -euo pipefail
+
+          echo "===== RELEASE FILES ====="
+          find dist \
+            -maxdepth 1 \
+            -type f \
+            -print \
+            | sort
+
+          echo
           ls -lah dist
 
 
-      - name: Publish PXL Release
+      - name: Publish PXL release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PXL_TAG: ${{ needs.prepare.outputs.pxl_tag }}
           UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
-          GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
 
-          NOTES=$(cat <<EOF
-          ## PXL Meshtastic
+          NOTES="$(cat <<EOF
+          # PXL Meshtastic ${PXL_VERSION}
 
           Based on official Meshtastic:
 
           **${UPSTREAM_TAG}**
 
-          ### PXL changes
+          Release tag:
 
-          - OLED_RU
-          - PXL Mesh OEM boot screen
-          - PXL STATUS screen
-          - shorter boot splash
+          **${PXL_TAG}**
 
-          ### Unchanged
+          ## PXL changes
 
-          - LoRa radio stack
-          - routing
-          - protocol
+          - OLED_RU Cyrillic display support
+          - animated PXL MESH boot on OLED/TFT
+          - E-Ink safe static PXL boot
+          - PXL ${PXL_VERSION} boot branding
+          - fixed PXL STATUS layout
+          - battery percentage and voltage
+          - online/total node count
+          - channel utilization
+          - TX airtime
+          - compact device role
+          - shorter boot stage
+
+          ## Unchanged
+
+          - LoRa protocol
+          - packet format
+          - routing behavior
+          - encryption
           - region limits
           - RU power limit
+          - radio power limits
+          - Meshtastic protocol compatibility
 
-          ### Boards
+          ## Supported targets
 
           - LilyGo T3S3
           - LilyGo T3S3 E-Paper
@@ -756,18 +1267,47 @@ jobs:
           - Heltec Mesh Node T114
           - Heltec Mesh Node T096
 
-          ESP32 builds use \`.bin\`.
+          ## Firmware files
 
-          nRF52840 builds use \`.uf2\`.
+          **update**
 
-          No factory firmware is published.
+          Files ending in:
+
+          \`-update.bin\`
+
+          or:
+
+          \`-update.uf2\`
+
+          are intended for normal upgrades.
+
+          **factory**
+
+          Files ending in:
+
+          \`-factory.bin\`
+
+          or:
+
+          \`-factory.uf2\`
+
+          are clean-install images when the upstream target generates one.
+
+          For an already configured ESP32 node, use the **update** image unless you intentionally want a clean installation.
+
+          SHA-256 checksum files are included for every firmware image.
+
+          ---
+
+          Unofficial community firmware.
           EOF
-          )
+          )"
 
 
           if gh release view "$PXL_TAG" >/dev/null 2>&1; then
 
-            echo "Updating existing release $PXL_TAG"
+            echo "Updating existing release:"
+            echo "$PXL_TAG"
 
             gh release upload \
               "$PXL_TAG" \
@@ -776,17 +1316,18 @@ jobs:
 
             gh release edit \
               "$PXL_TAG" \
-              --title "PXL Meshtastic ${UPSTREAM_TAG}" \
+              --title "PXL Meshtastic ${PXL_VERSION} · ${UPSTREAM_TAG}" \
               --notes "$NOTES"
 
           else
 
-            echo "Creating release $PXL_TAG"
+            echo "Creating release:"
+            echo "$PXL_TAG"
 
             gh release create \
               "$PXL_TAG" \
               dist/* \
-              --title "PXL Meshtastic ${UPSTREAM_TAG}" \
+              --title "PXL Meshtastic ${PXL_VERSION} · ${UPSTREAM_TAG}" \
               --notes "$NOTES"
 
           fi
