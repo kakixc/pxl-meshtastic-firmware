@@ -6,6 +6,12 @@ PXL firmware stays compatible with the normal Meshtastic mesh and does not modif
 
 > Current PXL revision: **PXL 0.2**
 
+Development of PXL 0.3 for Heltec V3 is on the
+`feature/pxl-0.3-low-power` branch. Its manual GitHub Actions workflow builds
+an artifact from the official Meshtastic `v2.7.26.54e0d8d` tag. This is a
+development build; power consumption and button wake behavior require tests
+on a physical Heltec V3 before release.
+
 ## PXL changes
 
 ### PXL boot
