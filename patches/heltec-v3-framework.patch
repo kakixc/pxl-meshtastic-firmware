@@ -1,0 +1,12 @@
+diff --git a/variants/esp32s3/heltec_v3/platformio.ini b/variants/esp32s3/heltec_v3/platformio.ini
+index 2f53c87..e5ca8d1 100644
+--- a/variants/esp32s3/heltec_v3/platformio.ini
++++ b/variants/esp32s3/heltec_v3/platformio.ini
+@@ -12,2 +12,5 @@
+ extends = esp32s3_base
++platform_packages =
++  ${esp32_common.platform_packages}
++  platformio/framework-arduinoespressif32 @ https://github.com/m1nl/esp32-arduino-lib-builder/releases/download/v2.x-1f03867-3240598/framework-arduinoespressif32-v2.x-1f03867-3240598.tar.gz
+ board = heltec_wifi_lora_32_V3
+ board_level = pr
+ board_check = true

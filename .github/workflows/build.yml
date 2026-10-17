@@ -1,4 +1,4 @@
-name: Build PXL Heltec V3 baseline
+name: Build PXL Heltec V3 candidate
 
 on:
   workflow_dispatch:
@@ -132,6 +132,26 @@ jobs:
       # PXL patches
       # --------------------------------------------------------
 
+      - name: Verify PM framework archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARCHIVE="$RUNNER_TEMP/framework-arduinoespressif32-pm.tar.gz"
+          curl --fail --location --retry 2 \
+            --output "$ARCHIVE" \
+            https://github.com/m1nl/esp32-arduino-lib-builder/releases/download/v2.x-1f03867-3240598/framework-arduinoespressif32-v2.x-1f03867-3240598.tar.gz
+          echo "ea294c5e5bce958378b407306ad2b29ad691e42eacb6d9197d583fca28e7595f  $ARCHIVE" \
+            | sha256sum --check -
+
+      - name: Apply Heltec V3 framework pin
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git -C firmware apply --check "$GITHUB_WORKSPACE/patches/heltec-v3-framework.patch"
+          git -C firmware apply "$GITHUB_WORKSPACE/patches/heltec-v3-framework.patch"
+
       - name: Apply PXL 0.2 patches
         shell: bash
         run: |
@@ -171,6 +191,16 @@ jobs:
       # --------------------------------------------------------
       # Build
       # --------------------------------------------------------
+
+      - name: Verify installed ESP32-S3 Power Management
+        working-directory: firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m platformio pkg install -e heltec-v3
+          python ../scripts/verify_pm_framework.py \
+            --framework-dir "$HOME/.platformio/packages/framework-arduinoespressif32"
 
       - name: Build ${{ matrix.display_name }}
         working-directory: firmware
