@@ -12,6 +12,12 @@ an artifact from the official Meshtastic `v2.7.26.54e0d8d` tag. This is a
 development build; power consumption and button wake behavior require tests
 on a physical Heltec V3 before release.
 
+Current feature-branch artifacts retain PXL 0.2 UI and use a PM-capable
+Arduino framework, but **do not enable Dynamic Light Sleep**. Review found
+that the initial wake configuration could alter USER and LoRa interrupts.
+PXL 0.3 runtime power saving remains under investigation; do not treat the
+current artifact as a finished PXL 0.3 firmware.
+
 ## PXL changes
 
 ### PXL boot

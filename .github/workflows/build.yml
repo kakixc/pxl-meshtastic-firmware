@@ -152,6 +152,23 @@ jobs:
           git -C firmware apply --check "$GITHUB_WORKSPACE/patches/heltec-v3-framework.patch"
           git -C firmware apply "$GITHUB_WORKSPACE/patches/heltec-v3-framework.patch"
 
+      - name: Install only the checksum-verified framework archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          archive = Path(os.environ["RUNNER_TEMP"]) / "framework-arduinoespressif32-pm.tar.gz"
+          config = Path("firmware/variants/esp32s3/heltec_v3/platformio.ini")
+          source = "https://github.com/m1nl/esp32-arduino-lib-builder/releases/download/v2.x-1f03867-3240598/framework-arduinoespressif32-v2.x-1f03867-3240598.tar.gz"
+          text = config.read_text(encoding="utf-8")
+          if not archive.is_file() or text.count(source) != 1:
+              raise SystemExit("Verified framework archive or board package pin missing")
+          config.write_text(text.replace(source, archive.as_uri()), encoding="utf-8")
+          PY
+
       - name: Apply PXL 0.2 patches
         shell: bash
         run: |
