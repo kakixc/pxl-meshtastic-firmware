@@ -14,7 +14,7 @@ was available for this validation.
 | Checksum-verified archive used by compiler | [Manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39001031077) passed after PlatformIO installed the downloaded and SHA-256-checked local archive |
 | Full PXL 0.3 dynamic sleep patch | Experimental local compile passed, but review found unsafe wake and ISR behavior; patch is excluded from the branch workflow |
 | Heltec V3 short USER press with screen off | A board-guarded source patch queues the frame change after screen-on; [manual Actions run 39093316580](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39093316580) compiled and packaged it. Device behavior is pending |
-| Heltec V3 USER polling after ordinary Light Sleep | Candidate schedules an immediate OneButton poll and prevents the current loop from delaying if USER is still held after the regular ISR is reattached. The expanded patch applies to exact-tag source; compilation and device behavior of this final revision are pending |
+| Heltec V3 USER polling after ordinary Light Sleep | Candidate schedules an immediate OneButton poll and prevents the current loop from delaying if USER is still held after the regular ISR is reattached. [Manual Actions run 39094022238](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39094022238) compiled the final revision; device behavior is pending |
 | Normal application update image | PM-only CI artifact contains distinct `PXL.2-update.bin` (2,137,296 bytes, SHA-256 `bb14fd2588461a3a6c1f8e2cde253272c07f9edf71c71de332ea299e08e93649`) and factory image; both checksum files match. PXL 0.3 pending |
 | Release publication | None |
 
@@ -24,11 +24,36 @@ and a separate factory image (2,202,896 bytes). Both packaged checksum files
 matched the downloaded images. The update is an application image; preserving
 configuration still requires a normal update test on a device.
 
+The latest candidate, run `39094022238` at commit `b9dccae`, produced
+`PXL.2-update.bin` (2,137,408 bytes, SHA-256
+`1e56618f4c780f29808c42b1d05035a77f3a99d0de5f90163871f091948084d3`)
+and a separate factory image (2,202,944 bytes, SHA-256
+`aa53b4183c441d52e2ec7b2008b4e64902273d1990f4a4f755aa2a2bb33a247f`).
+Both matched their packaged checksum files. Neither image enables automatic
+light sleep or proves the button behavior on hardware.
+
 The build targets only `heltec-v3`. The PM framework is pinned through that
 board's PlatformIO configuration. The official Meshtastic radio protocol,
 routing, encryption, region tables, and transmit power limits are not patched.
 The current branch artifact still identifies itself as PXL 0.2 and does not
-release the PM sleep lock. It is not a low-power PXL 0.3 firmware.
+enable automatic light sleep. It is not a low-power PXL 0.3 firmware.
+
+## M1NL and upstream PR port inventory
+
+| Mechanism | Status on official 2.7.26 in this branch |
+| --- | --- |
+| PM-capable Arduino 2.x framework for Heltec V3 | Pinned, hash-verified, compiled |
+| PXL 0.2 animation, STATUS, Cyrillic, shorter boot | Retained and compiled |
+| USER off-screen frame queue and prompt poll after ordinary Light Sleep | Heltec V3-only candidates; device behavior untested |
+| Automatic light sleep and `ESP_PM_NO_LIGHT_SLEEP` state control | Experimental local compile only; excluded from CI artifact |
+| RTC USER/DIO1 wake, pin restoration, repeated radio IRQ handling | Investigated; no safe 2.7.26 runtime port yet |
+| M1NL GPS, radio, serial, and Bluetooth interactions with automatic sleep | Not ported or verified |
+| M1NL 32 kHz slow-clock setup and PR #11702 DFS/Wi-Fi power saving | Not ported; board and framework behavior unverified |
+
+This inventory is selective by design: the [M1NL proposal](https://github.com/meshtastic/firmware/pull/7121)
+targets another firmware revision, and [PR #11702](https://github.com/meshtastic/firmware/pull/11702)
+is a draft against later `develop`. Copying either entire tree would replace
+the required official 2.7.26 base.
 
 ## Device test gate
 
