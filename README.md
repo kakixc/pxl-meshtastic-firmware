@@ -15,6 +15,8 @@ on a physical Heltec V3 before release.
 Current feature-branch artifacts retain PXL 0.2 UI and use a PM-capable
 Arduino framework, but **do not enable Dynamic Light Sleep**. Review found
 that the initial wake configuration could alter USER and LoRa interrupts.
+The branch also contains a Heltec V3-only candidate to advance the OLED frame
+on a short USER press that wakes an off screen; hardware validation is pending.
 PXL 0.3 runtime power saving remains under investigation; do not treat the
 current artifact as a finished PXL 0.3 firmware.
 

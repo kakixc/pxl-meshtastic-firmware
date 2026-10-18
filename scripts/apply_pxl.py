@@ -18,8 +18,11 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+pending_writes: dict[Path, str] = {}
+
+
 def write(path: Path, text: str) -> None:
-    path.write_text(text, encoding="utf-8")
+    pending_writes[path] = text
 
 
 def find_one(pattern, text, name, flags=0):
@@ -672,11 +675,6 @@ pxl_screens = pxl_screens.replace(
     f"PXL {PXL_VERSION}"
 )
 
-pxl_screens = pxl_screens.replace(
-    "__PXL_VERSION__",
-    f"PXL {PXL_VERSION}"
-)
-
 
 renderer = (
     renderer[:match.start()]
@@ -713,10 +711,10 @@ required_strings = {
 
 
 combined = (
-    read(screen_path)
-    + read(header_path)
-    + read(renderer_path)
-    + read(prefs_path)
+    pending_writes[screen_path]
+    + pending_writes[header_path]
+    + pending_writes[renderer_path]
+    + pending_writes[prefs_path]
 )
 
 
@@ -725,6 +723,9 @@ for name, value in required_strings.items():
         raise RuntimeError(
             f"Verification failed: {name}"
         )
+
+for path, text in pending_writes.items():
+    path.write_text(text, encoding="utf-8")
 
 
 print()

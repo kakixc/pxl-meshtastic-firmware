@@ -1,0 +1,15 @@
+diff --git a/src/input/InputBroker.cpp b/src/input/InputBroker.cpp
+index c84eb2c..3356967 100644
+--- a/src/input/InputBroker.cpp
++++ b/src/input/InputBroker.cpp
+@@ -120,3 +120,9 @@ int InputBroker::handleInputEvent(const InputEvent *event)
+     if (screen && screenWasOff) {
+-        // If the screen was off, it is in the process of turning on, and we just drop the event
++#ifdef HELTEC_V3
++        // SET_ON is queued by the power FSM. Queue the frame change behind it;
++        // Screen::handleInputEvent would otherwise ignore it while screenOn is false.
++        if (event && event->inputEvent == INPUT_BROKER_USER_PRESS)
++            screen->showNextFrame();
++#endif
++        // Other input events retain the upstream screen-wake behavior.
+         return 0;

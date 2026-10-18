@@ -176,6 +176,13 @@ jobs:
 
           python3 scripts/apply_pxl.py --firmware-dir firmware
 
+      - name: Apply Heltec V3 short-press candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C firmware apply --check "$GITHUB_WORKSPACE/patches/heltec-v3-button.patch"
+          git -C firmware apply "$GITHUB_WORKSPACE/patches/heltec-v3-button.patch"
+
 
       # --------------------------------------------------------
       # Validate generated source
@@ -370,6 +377,7 @@ jobs:
           - PXL firmware version branding
           - PXL STATUS
           - shorter boot stage
+          - queue one screen change for a short USER press that wakes an off screen (device test pending)
 
           Unchanged:
           - LoRa protocol

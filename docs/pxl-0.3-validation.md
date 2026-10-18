@@ -13,6 +13,7 @@ was available for this validation.
 | PM-capable Arduino 2.x framework, ESP32-S3 | `CONFIG_PM_ENABLE=y` and `CONFIG_FREERTOS_USE_TICKLESS_IDLE=y` verified; local build and [manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/38999865180) passed |
 | Checksum-verified archive used by compiler | [Manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39001031077) passed after PlatformIO installed the downloaded and SHA-256-checked local archive |
 | Full PXL 0.3 dynamic sleep patch | Experimental local compile passed, but review found unsafe wake and ISR behavior; patch is excluded from the branch workflow |
+| Heltec V3 short USER press with screen off | A board-guarded source patch queues the frame change after screen-on; exact-tag patch applies, but compilation and device behavior of this revision are pending |
 | Normal application update image | PM-only CI artifact contains distinct `PXL.2-update.bin` (2,137,296 bytes, SHA-256 `bb14fd2588461a3a6c1f8e2cde253272c07f9edf71c71de332ea299e08e93649`) and factory image; both checksum files match. PXL 0.3 pending |
 | Release publication | None |
 
@@ -64,6 +65,10 @@ All cases below are **untested** until run on a physical Heltec V3:
   found a screen command queue race and an entry-state transition race. This
   draft is kept only under ignored local `work/` for investigation and is not
   applied by GitHub Actions.
+- ESP-IDF 4.4.7 says RTC EXT0/EXT1 wake leaves their pins in RTC mode until
+  `rtc_gpio_deinit()` is called, and EXT1 may require clearing pad hold too.
+  The installed Arduino 2.x headers offer no general automatic-wake callback
+  to restore USER and DIO1 before their ordinary interrupt handlers run.
 - Other boards are outside this PXL 0.3 phase. The feature flag and framework
   pin are scoped to Heltec V3.
 
@@ -101,10 +106,9 @@ The retained PXL 0.2 patcher compiles on the exact official tag and keeps the
 boot animation, shorter boot stage, Cyrillic setting, and PXL STATUS. Further
 improvements can be made after the power path is safe:
 
-- `scripts/apply_pxl.py` writes each upstream file before all later anchors
-  are checked. Collect all four edited contents, validate them, then write;
-  that will avoid a partially patched checkout when a future upstream tag
-  moves an anchor.
+- `scripts/apply_pxl.py` now collects and verifies all four edited contents
+  before writing. A missing last-file anchor was checked against a disposable
+  exact-tag checkout and left all four source files untouched.
 - The PXL STATUS frame uses the same `icon_system` marker as the next stock
   system frame. Consider a distinct indicator and verify it on the 128×64 OLED.
 - Measure rendered text width for long role names and high node counts before
