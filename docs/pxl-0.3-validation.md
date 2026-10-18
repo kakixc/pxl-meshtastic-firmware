@@ -13,9 +13,15 @@ was available for this validation.
 | PM-capable Arduino 2.x framework, ESP32-S3 | `CONFIG_PM_ENABLE=y` and `CONFIG_FREERTOS_USE_TICKLESS_IDLE=y` verified; local build and [manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/38999865180) passed |
 | Checksum-verified archive used by compiler | [Manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39001031077) passed after PlatformIO installed the downloaded and SHA-256-checked local archive |
 | Full PXL 0.3 dynamic sleep patch | Experimental local compile passed, but review found unsafe wake and ISR behavior; patch is excluded from the branch workflow |
-| Heltec V3 short USER press with screen off | A board-guarded source patch queues the frame change after screen-on; exact-tag patch applies, but compilation and device behavior of this revision are pending |
+| Heltec V3 short USER press with screen off | A board-guarded source patch queues the frame change after screen-on; [manual Actions run 39093316580](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39093316580) compiled and packaged it. Device behavior is pending |
 | Normal application update image | PM-only CI artifact contains distinct `PXL.2-update.bin` (2,137,296 bytes, SHA-256 `bb14fd2588461a3a6c1f8e2cde253272c07f9edf71c71de332ea299e08e93649`) and factory image; both checksum files match. PXL 0.3 pending |
 | Release publication | None |
+
+Run `39093316580` produced `PXL.2-update.bin` (2,137,360 bytes,
+SHA-256 `7408e7f7f6b1c760918e7c2e8bb0a9cfcb3f8f6abcabc665135cd70517616ece`)
+and a separate factory image (2,202,896 bytes). Both packaged checksum files
+matched the downloaded images. The update is an application image; preserving
+configuration still requires a normal update test on a device.
 
 The build targets only `heltec-v3`. The PM framework is pinned through that
 board's PlatformIO configuration. The official Meshtastic radio protocol,
