@@ -1,3 +1,16 @@
+diff --git a/src/input/ButtonThread.cpp b/src/input/ButtonThread.cpp
+index 3b0a46e..2df761a 100644
+--- a/src/input/ButtonThread.cpp
++++ b/src/input/ButtonThread.cpp
+@@ -346,2 +346,8 @@ int ButtonThread::afterLightSleep(esp_sleep_wakeup_cause_t cause)
+     attachButtonInterrupts();
++#ifdef HELTEC_V3
++    // The press edge may have occurred while the regular ISR was detached.
++    // Poll the held button promptly; OneButton still classifies the press.
++    if (isButtonPressed(_pinNum))
++        setIntervalFromNow(0);
++#endif
+     return 0; // Indicates success
 diff --git a/src/input/InputBroker.cpp b/src/input/InputBroker.cpp
 index c84eb2c..3356967 100644
 --- a/src/input/InputBroker.cpp
