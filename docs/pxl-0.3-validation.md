@@ -1,7 +1,8 @@
 # PXL 0.3 Heltec V3 validation
 
 PXL 0.3 is an experimental Heltec V3 project based on official Meshtastic
-`v2.7.26.54e0d8d`. A complete PXL 0.3 image is not ready. This document
+`v2.7.26.54e0d8d`. A compiled experimental image exists; a validated release
+is not ready. This document
 separates build evidence from device behavior. No Heltec V3 or current meter
 was available for this validation.
 
@@ -12,10 +13,10 @@ was available for this validation.
 | Official tag and retained PXL 0.2 display patch | Local build and manual Actions baseline passed |
 | PM-capable Arduino 2.x framework, ESP32-S3 | `CONFIG_PM_ENABLE=y` and `CONFIG_FREERTOS_USE_TICKLESS_IDLE=y` verified; local build and [manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/38999865180) passed |
 | Checksum-verified archive used by compiler | [Manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39001031077) passed after PlatformIO installed the downloaded and SHA-256-checked local archive |
-| Full PXL 0.3 dynamic sleep patch | An initial GPIO-wake draft compiled but failed ISR review. A second RTC EXT0/EXT1 prototype also compiles and applies to the exact official tag; unresolved runtime risks keep it out of the branch workflow |
+| Full PXL 0.3 dynamic sleep patch | The RTC EXT0/EXT1 prototype applied to the exact official tag and [opt-in manual Actions run 39424790633](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39424790633) compiled it. The default workflow still omits it; runtime wake behavior is unverified |
 | Heltec V3 short USER press with screen off | A board-guarded source patch queues the frame change after screen-on; [manual Actions run 39093316580](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39093316580) compiled and packaged it. Device behavior is pending |
 | Heltec V3 USER polling after ordinary Light Sleep | Candidate schedules an immediate OneButton poll and prevents the current loop from delaying if USER is still held after the regular ISR is reattached. [Manual Actions run 39094022238](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39094022238) compiled the final revision; device behavior is pending |
-| Normal application update image | [Latest manual Actions run 39423453321](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39423453321) contains distinct `PXL.2-update.bin` (2,137,440 bytes, SHA-256 `3ab440d36a45860405dab6e8c5d50e3d25fa0c78dd5bb6401dd8f742780ed132`) and factory image; both checksum files match. PXL 0.3 pending |
+| Normal application update image | [Opt-in run 39424790633](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39424790633) contains distinct `PXL.3-experimental-update.bin` (2,140,896 bytes, SHA-256 `d9607319d94fdf94341e176105cfaa47371084e7a75424ae6cb0a01badb208cc`) and factory image; both checksum files match. Configuration retention on a device is pending |
 | Release publication | None |
 
 Run `39093316580` produced `PXL.2-update.bin` (2,137,360 bytes,
@@ -32,7 +33,7 @@ and a separate factory image (2,202,944 bytes, SHA-256
 Both matched their packaged checksum files. Neither image enables automatic
 light sleep or proves the button behavior on hardware.
 
-The latest branch build, run `39423453321` at commit `1866fe1`, produced
+The latest default PXL 0.2 build, run `39423453321` at commit `1866fe1`, produced
 `PXL.2-update.bin` (2,137,440 bytes, SHA-256
 `3ab440d36a45860405dab6e8c5d50e3d25fa0c78dd5bb6401dd8f742780ed132`)
 and a separate factory image (2,202,976 bytes, SHA-256
@@ -40,11 +41,16 @@ and a separate factory image (2,202,976 bytes, SHA-256
 The downloaded checksum files matched. It includes the PXL STATUS width
 guard but not Dynamic Light Sleep.
 
+The opt-in PXL 0.3 run at commit `95ecb1e` produced a separate factory image
+of 2,206,432 bytes (SHA-256
+`a01bd86cdfca58a263162a9479102b364ec1040e855cc775a27b65662cf42821`).
+Both downloaded checksums matched. `esptool image-info` identified the update
+as an ESP32-S3 application image with valid checksum and validation hash.
 The build targets only `heltec-v3`. The PM framework is pinned through that
 board's PlatformIO configuration. The official Meshtastic radio protocol,
 routing, encryption, region tables, and transmit power limits are not patched.
-The current branch artifact still identifies itself as PXL 0.2 and does not
-enable automatic light sleep. It is not a low-power PXL 0.3 firmware.
+The default workflow artifact remains PXL 0.2 without automatic sleep. The
+opt-in PXL 0.3 image is an unvalidated test candidate, not a release.
 
 ## M1NL and upstream PR port inventory
 
@@ -53,8 +59,8 @@ enable automatic light sleep. It is not a low-power PXL 0.3 firmware.
 | PM-capable Arduino 2.x framework for Heltec V3 | Pinned, hash-verified, compiled |
 | PXL 0.2 animation, STATUS, Cyrillic, shorter boot | Retained and compiled |
 | USER off-screen frame queue and prompt poll after ordinary Light Sleep | Heltec V3-only candidates; device behavior untested |
-| Automatic light sleep and `ESP_PM_NO_LIGHT_SLEEP` state control | Experimental local compile only; excluded from CI artifact |
-| RTC USER/DIO1 wake, pin restoration, repeated radio IRQ handling | Investigated; no safe 2.7.26 runtime port yet |
+| Automatic light sleep and `ESP_PM_NO_LIGHT_SLEEP` state control | Compiled in opt-in experimental CI artifact; excluded from default build |
+| RTC USER/DIO1 wake, pin restoration, repeated radio IRQ handling | Source port compiled; physical wake and repeated IRQ behavior not verified |
 | M1NL GPS, radio, serial, and Bluetooth interactions with automatic sleep | Not ported or verified |
 | M1NL 32 kHz slow-clock setup and PR #11702 DFS/Wi-Fi power saving | Not ported; board and framework behavior unverified |
 
@@ -63,10 +69,11 @@ targets another firmware revision, and [PR #11702](https://github.com/meshtastic
 is a draft against later `develop`. Copying either entire tree would replace
 the required official 2.7.26 base.
 
-## RTC prototype built locally
+## RTC prototype compile evidence
 
 `patches/heltec-v3-dynamic-sleep.patch` is an **experimental source patch**,
-not part of the manual Actions build or the downloadable update artifact. It
+applied only when the manual workflow's `experimental_dynamic_sleep` input is
+true. It
 uses the verified PM-capable Arduino 2.x framework, RTC EXT1 active-low wake
 for USER GPIO0, and RTC EXT0 active-high wake for DIO1 GPIO14. It restores
 only these two RTC pins, reattaches the normal button ISR, and calls the
@@ -85,7 +92,7 @@ The RTC level-guard revision also compiled in 263.30 seconds and generated a
 2,141,120-byte application image; it has not been packaged by Actions.
 These are compile results, not runtime validation or a PXL 0.3 release.
 
-Remaining source-level questions before connecting this patch to Actions:
+Remaining questions before considering this patch for a default build or release:
 
 - Meshtastic's power FSM runs on a roughly 100 ms scheduled callback. A brief
   USER press may be released before it handles the RTC wake. The wake reason
@@ -256,6 +263,15 @@ version branding, a shorter stock boot stage, PXL STATUS, and compact role
 names. The exact-tag build verifies they compile together; none has been
 visually checked on the Heltec V3 OLED in this session. The button patch is a
 separate Heltec V3 change, also awaiting device testing.
+
+For the device pass, time the stock and PXL boot stages and check progress-bar
+motion, version text, and an ordinary restart. Display a Russian node name and
+message to inspect Cyrillic glyphs. Visit PXL STATUS on battery and USB,
+verify that battery voltage, node count, channel use, TX use, and role agree
+with Meshtastic's app, and exercise values long enough to show an ellipsis.
+Move forward and backward through neighboring frames and confirm that the
+STATUS indicator is understandable. Repeat screen navigation with the display
+already off and after a sleep/wake cycle.
 
 1. **Before PXL 0.3 release:** check battery and airtime extremes on the OLED
    and verify that the STATUS ellipsis is legible. If not, switch to a compact
