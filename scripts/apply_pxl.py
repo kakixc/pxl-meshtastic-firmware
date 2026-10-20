@@ -562,6 +562,17 @@ void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, i
 
     int textY = firstY;
 
+    auto drawStatusLine = [&](int16_t atY) {
+        size_t length = strlen(line);
+        while (length > 3 && display->getStringWidth(line) > SCREEN_WIDTH - 2) {
+            line[--length] = 0;
+            line[length - 3] = '.';
+            line[length - 2] = '.';
+            line[length - 1] = '.';
+        }
+        display->drawString(x, atY, line);
+    };
+
 
     // Battery
     if (powerStatus->getHasBattery()) {
@@ -580,11 +591,7 @@ void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, i
         );
     }
 
-    display->drawString(
-        x,
-        textY,
-        line
-    );
+    drawStatusLine(textY);
 
     textY += lineStep;
 
@@ -598,11 +605,7 @@ void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, i
         nodeStatus->getNumTotal()
     );
 
-    display->drawString(
-        x,
-        textY,
-        line
-    );
+    drawStatusLine(textY);
 
     textY += lineStep;
 
@@ -616,11 +619,7 @@ void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, i
         airTime->utilizationTXPercent()
     );
 
-    display->drawString(
-        x,
-        textY,
-        line
-    );
+    drawStatusLine(textY);
 
     textY += lineStep;
 
@@ -653,11 +652,7 @@ void drawPxlStatus(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, i
             : "UNKNOWN"
     );
 
-    display->drawString(
-        x,
-        textY,
-        line
-    );
+    drawStatusLine(textY);
 
 
     graphics::drawCommonFooter(

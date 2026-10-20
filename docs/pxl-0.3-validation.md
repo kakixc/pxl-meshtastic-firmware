@@ -207,22 +207,76 @@ DIO1 remains high across consecutive packets. A timer used solely to poll for
 RTC wake could materially reduce the intended power savings, so its current
 cost must be measured before adoption.
 
+The experimental port also differs from M1NL's power policy: M1NL configures
+20 MHz minimum CPU frequency when dynamic frequency scaling is available,
+whereas the current Heltec V3 prototype holds 80 MHz to stay aligned with the
+official tag's normal CPU setting. Thus even successful automatic sleep would
+not prove equivalent power use. Lowering the minimum needs UART, radio timing,
+Bluetooth, and current tests on the target board; it is not a safe numerical
+change to make from a compiler result alone.
+
 ## PXL display patch review
 
 The retained PXL 0.2 patcher compiles on the exact official tag and keeps the
-boot animation, shorter boot stage, Cyrillic setting, and PXL STATUS. Further
-improvements can be made after the power path is safe:
+boot animation, shorter boot stage, Cyrillic setting, and PXL STATUS:
 
 - `scripts/apply_pxl.py` now collects and verifies all four edited contents
   before writing. A missing last-file anchor was checked against a disposable
   exact-tag checkout and left all four source files untouched.
 - The PXL STATUS frame uses the same `icon_system` marker as the next stock
   system frame. Consider a distinct indicator and verify it on the 128×64 OLED.
-- Measure rendered text width for long role names and high node counts before
-  drawing PXL STATUS; the fixed `char line[32]` protects memory but does not
-  prevent text clipping on the display.
-- The version placeholder replacement is called twice consecutively in the
-  patcher; one call is sufficient. This is cleanup, not a functional defect.
+- PXL STATUS now checks rendered width for each of its four rows (battery,
+  nodes, channel/TX utilization, role) before drawing. The patcher applied to
+  a clean exact-tag checkout, and the final Heltec V3 incremental build passed
+  in 80.42 seconds. Shortened values end in an ellipsis; inspection on a
+  128×64 OLED is still pending.
+- The version placeholder is replaced once in the current patcher. An older
+  review note about a duplicate replacement was stale.
+
+### PXL function audit and improvement candidates
+
+The source-level inventory is `OLED_RU`, the PXL OEM boot frame and animation,
+version branding, a shorter stock boot stage, PXL STATUS, and compact role
+names. The exact-tag build verifies they compile together; none has been
+visually checked on the Heltec V3 OLED in this session. The button patch is a
+separate Heltec V3 change, also awaiting device testing.
+
+1. **Before PXL 0.3 release:** check battery and airtime extremes on the OLED
+   and verify that the STATUS ellipsis is legible. If not, switch to a compact
+   numeric format that retains the complete value.
+2. **Before PXL 0.3 release:** validate USER tap, hold, double/multiple press,
+   screen-off wake, and a tap during sleep on a real Heltec V3. Compare with
+   stock 2.7.26 to detect changed long-press actions.
+3. **Useful UI follow-up:** give PXL STATUS a distinct frame indicator. It
+   currently reuses `icon_system`, so two adjacent frames look identical in
+   the indicator strip.
+4. **Useful diagnostics follow-up:** show last wake reason and counted sleep
+   entries in a debug view. This would make it possible to tell actual sleep
+   from a PM-capable build that remains awake due to another PM lock. Keep
+   diagnostic updates out of the hot radio path.
+5. **Useful boot follow-up:** confirm that the static animation start time is
+   reset if the UI is restarted without rebooting the chip; only change it if
+   that case is reproducible.
+
+### Hop-delivery investigation
+
+Official 2.7.26 already implements hop limits, duplicate/retransmission
+handling, rebroadcast roles, traceroute with per-hop SNR, and a radio backup
+poll for missed RX_DONE interrupts. PXL 0.3 leaves those mechanisms unchanged.
+The Dynamic Light Sleep prototype can plausibly lose or delay an RX_DONE wake;
+that would appear to users as worse delivery through hops even though the
+routing code is untouched.
+
+Use at least three nodes (source, relay, destination) and compare official
+2.7.26, PXL 0.2, and the PXL 0.3 candidate with identical channel, role,
+placement, power, and hop-limit settings. Send a fixed sequence of direct and
+two-hop acknowledged messages and record delivery count, ACK latency,
+traceroute path/SNR, channel/TX utilization, missed RX_DONE logs, and current
+draw. Repeat with display and Bluetooth in their intended usage states. A
+software-only build cannot establish that relay delivery has improved. If
+losses occur only in the sleep candidate, fix the radio wake path before
+considering any change to official routing or rebroadcast policy. Any later
+routing change needs a separate proposal and measured comparison.
 
 **Release recommendation:** do not publish a final release. First finish a
 safe wake design, then pass the device test gate and current measurements.
