@@ -1,5 +1,5 @@
 diff --git a/src/PowerFSM.cpp b/src/PowerFSM.cpp
-index b11f37c..d4759c0 100644
+index b11f37c..c729f53 100644
 --- a/src/PowerFSM.cpp
 +++ b/src/PowerFSM.cpp
 @@ -12,6 +12,7 @@
@@ -76,13 +76,13 @@ index b11f37c..d4759c0 100644
  {
 +#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
 +    if (pxlDynamicSession) {
-+        esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-+        if (!setPxlDynamicLightSleep(false))
++        bool restored = setPxlDynamicLightSleep(false);
++        if (!restored)
 +            LOG_ERROR("PXL PM lock could not be reacquired after wake");
 +        pxlDynamicSession = false;
-+        // The RTC wake may consume DIO1's rising edge. The radio chip keeps
-+        // RX_DONE latched, so ask the existing RadioLib backup path now.
-+        if (cause == ESP_SLEEP_WAKEUP_EXT0 && RadioLibInterface::instance)
++        // Any wake can overlap an RX_DONE edge while the digital ISR is
++        // detached. The existing backup only notifies for a latched RX_DONE.
++        if (restored && RadioLibInterface::instance)
 +            RadioLibInterface::instance->pollMissedIrqs();
 +        statusLEDModule->setPowerLED(true);
 +    }

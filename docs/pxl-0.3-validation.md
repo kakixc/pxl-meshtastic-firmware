@@ -238,6 +238,14 @@ fresh exact-tag checkout and compiled locally in 263.30 seconds. This narrows
 false wake handling; it cannot recover a short USER press already released or
 establish that RX_DONE is reliably handled after repeated radio wakes.
 
+A follow-up candidate checks the official latched RX_DONE backup after every
+experimental light-sleep exit once the pins and PM lock are restored. The
+backup only notifies when the radio is receiving and its RX_DONE flag is set.
+This covers an RX completion that overlaps a USER or timer wake, but delivery
+through hops still requires the three-node test. The revised patch applied
+after the framework pin and compiled locally in 82.14 seconds; compilation
+alone is not evidence of improved reception.
+
 ## PXL display patch review
 
 The retained PXL 0.2 patcher compiles on the exact official tag and keeps the
