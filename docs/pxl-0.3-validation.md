@@ -246,6 +246,14 @@ through hops still requires the three-node test. The revised patch applied
 after the framework pin and compiled locally in 82.14 seconds; compilation
 alone is not evidence of improved reception.
 
+Source comparison found another omitted M1NL coordination step: its radio
+worker exits dynamic LS before processing an RX, TX_DONE, or queued transmit
+notification. Without that step, an outgoing packet could begin while the PXL
+prototype still used RTC DIO1 wake and a released PM lock. A Heltec V3-only
+hook now exits LS before radio work. It applies to the exact upstream tag and
+the local Heltec V3 incremental build passed in 52.58 seconds. Its TX_DONE
+behavior still needs device testing.
+
 ## PXL display patch review
 
 The retained PXL 0.2 patcher compiles on the exact official tag and keeps the

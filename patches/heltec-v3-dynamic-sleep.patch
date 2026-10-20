@@ -135,11 +135,39 @@ index 135f532..914b890 100644
 -} // namespace concurrency
 \ No newline at end of file
 +} // namespace concurrency
+diff --git a/src/mesh/RadioLibInterface.cpp b/src/mesh/RadioLibInterface.cpp
+index 335e76a..694d307 100644
+--- a/src/mesh/RadioLibInterface.cpp
++++ b/src/mesh/RadioLibInterface.cpp
+@@ -7,6 +7,10 @@
+ #include "configuration.h"
+ #include "error.h"
+ #include "main.h"
++#if defined(PXL_HELTEC_V3_DYNAMIC_SLEEP) && !MESHTASTIC_EXCLUDE_POWER_FSM
++#include "PowerFSM.h"
++#include "sleep.h"
++#endif
+ #include "mesh-pb-constants.h"
+ #include <pb_decode.h>
+ #include <pb_encode.h>
+@@ -362,6 +366,12 @@ currently active.
+ */
+ void RadioLibInterface::onNotify(uint32_t notification)
+ {
++#if defined(PXL_HELTEC_V3_DYNAMIC_SLEEP) && !MESHTASTIC_EXCLUDE_POWER_FSM
++    // Leave LS before servicing RX, TX_DONE, or a queued transmission.
++    // This restores DIO1 and blocks automatic sleep during radio work.
++    if (pxlDynamicLightSleepActive())
++        powerFSM.trigger(EVENT_WAKE_TIMER);
++#endif
+ 
+     switch (notification) {
+     case ISR_TX:
 diff --git a/src/sleep.cpp b/src/sleep.cpp
-index 64bd0c4..5f2fc3e 100644
+index 64bd0c4..597a3d7 100644
 --- a/src/sleep.cpp
 +++ b/src/sleep.cpp
-@@ -370,6 +370,166 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
+@@ -370,6 +370,171 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
  }
  
  #ifdef ARCH_ESP32
@@ -217,6 +245,11 @@ index 64bd0c4..5f2fc3e 100644
 +bool pxlDynamicLightSleepAvailable()
 +{
 +    return pxlLightSleepReady;
++}
++
++bool pxlDynamicLightSleepActive()
++{
++    return pxlLightSleepAllowed;
 +}
 +
 +esp_sleep_wakeup_cause_t pxlDynamicLightSleepWakeCause()
@@ -307,16 +340,17 @@ index 64bd0c4..5f2fc3e 100644
   * enter light sleep (preserves ram but stops everything about CPU).
   *
 diff --git a/src/sleep.h b/src/sleep.h
-index f780fb3..3b48ed1 100644
+index f780fb3..692c1ca 100644
 --- a/src/sleep.h
 +++ b/src/sleep.h
-@@ -10,6 +10,13 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb),
+@@ -10,6 +10,14 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb),
  #include "esp_sleep.h"
  esp_sleep_wakeup_cause_t doLightSleep(uint64_t msecToWake);
  
 +#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
 +bool initPxlDynamicLightSleep();
 +bool pxlDynamicLightSleepAvailable();
++bool pxlDynamicLightSleepActive();
 +esp_sleep_wakeup_cause_t pxlDynamicLightSleepWakeCause();
 +bool setPxlDynamicLightSleep(bool allow);
 +#endif
@@ -324,7 +358,7 @@ index f780fb3..3b48ed1 100644
  extern esp_sleep_source_t wakeCause;
  #endif
  
-@@ -52,4 +59,4 @@ void enableModemSleep();
+@@ -52,4 +60,4 @@ void enableModemSleep();
  #ifdef ARCH_ESP32
  void enableLoraInterrupt();
  bool shouldLoraWake(uint32_t msecToWake);
