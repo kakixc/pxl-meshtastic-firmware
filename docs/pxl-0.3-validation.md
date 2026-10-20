@@ -104,6 +104,9 @@ All cases below are **untested** until run on a physical Heltec V3:
   `rtc_gpio_deinit()` is called, and EXT1 may require clearing pad hold too.
   The installed Arduino 2.x headers offer no general automatic-wake callback
   to restore USER and DIO1 before their ordinary interrupt handlers run.
+- M1NL's `gpioReset()` iterates over every RTC-capable and output GPIO. A
+  Heltec V3 port should restore only the pins and holds it changes; broad
+  restoration can disturb unrelated board peripherals.
 - Other boards are outside this PXL 0.3 phase. The feature flag and framework
   pin are scoped to Heltec V3.
 
@@ -134,6 +137,33 @@ Before enabling automatic sleep, the Heltec V3-specific implementation must:
 
 The upstream sleep API reference is the [ESP-IDF 4.4.7 ESP32-S3 sleep modes
 documentation](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32s3/api-reference/system/sleep_modes.html).
+
+### Automatic-wake scheduling found in official 2.7.26
+
+`RadioLibInterface` inherits `NotifiedWorkerThread`, but that worker is an
+`OSThread` registered with `mainController`; it is not a separate FreeRTOS
+task. The main `loop()` calls `esp32Loop()`, checks power commands, polls missed
+radio IRQs at most once per second, processes input, and only then runs
+`mainController`. It can then block on `mainDelay`'s FreeRTOS semaphore until a
+scheduled thread is due. Normal USER and DIO1 edge ISRs notify that semaphore.
+
+ESP-IDF 4.4 says automatic Light Sleep gates peripheral interrupts. RTC
+EXT0/EXT1 can wake the chip, but that wake does not itself notify Meshtastic's
+semaphore. The main loop may therefore remain blocked until its next timeout;
+the actual delay depends on the nearest scheduled task. Once it runs, any RTC
+pin restoration in `esp32Loop()` precedes `mainController` callbacks, but a
+short USER press may already have ended, and the once-per-second radio backup
+poll is not an immediate DIO1 dispatch. This is a source-level risk analysis,
+not an observed device failure. See the [ESP-IDF 4.4 power management
+reference](https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32s3/api-reference/system/power_management.html).
+
+The next runtime candidate needs a bounded wake-to-dispatch path that restores
+only USER GPIO0 and DIO1 GPIO14 before ordinary digital reads, then lets
+OneButton classify the still-held button and RadioLib process the latched IRQ.
+It must establish what happens when USER is released before dispatch and when
+DIO1 remains high across consecutive packets. A timer used solely to poll for
+RTC wake could materially reduce the intended power savings, so its current
+cost must be measured before adoption.
 
 ## PXL display patch review
 
