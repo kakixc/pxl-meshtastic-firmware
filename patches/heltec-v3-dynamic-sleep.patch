@@ -1,0 +1,284 @@
+diff --git a/src/PowerFSM.cpp b/src/PowerFSM.cpp
+index b11f37c..d4d8dac 100644
+--- a/src/PowerFSM.cpp
++++ b/src/PowerFSM.cpp
+@@ -12,6 +12,7 @@
+ #include "MeshService.h"
+ #include "NodeDB.h"
+ #include "PowerMon.h"
++#include "RadioLibInterface.h"
+ #include "configuration.h"
+ #include "graphics/Screen.h"
+ #include "main.h"
+@@ -81,6 +82,10 @@ static void shutdownEnter()
+ #include "error.h"
+ 
+ static uint32_t secsSlept;
++#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
++static uint32_t pxlLightSleepStarted;
++static bool pxlDynamicSession;
++#endif
+ 
+ static void lsEnter()
+ {
+@@ -96,6 +101,51 @@ static void lsIdle()
+ {
+     // LOG_INFO("lsIdle begin ls_secs=%u", getPref_ls_secs());
+ 
++#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
++    // An on-enter callback runs before arduino-fsm assigns stateLS; defer
++    // transitions and wake setup until this idle callback owns the state.
++    if (!pxlDynamicSession && pxlDynamicLightSleepAvailable()) {
++        if (!doPreflightSleep() || (RadioLibInterface::instance && RadioLibInterface::instance->isSending())) {
++            powerFSM.trigger(EVENT_WAKE_TIMER);
++            return;
++        }
++
++        pxlLightSleepStarted = millis();
++        statusLEDModule->setPowerLED(false);
++        if (!setPxlDynamicLightSleep(true)) {
++            statusLEDModule->setPowerLED(true);
++            powerFSM.trigger(EVENT_WAKE_TIMER);
++            return;
++        }
++        pxlDynamicSession = true;
++    }
++
++    if (pxlDynamicSession) {
++        if (!doPreflightSleep() || (RadioLibInterface::instance && RadioLibInterface::instance->isSending()) ||
++            (uint32_t)(millis() - pxlLightSleepStarted) >= (uint64_t)config.power.ls_secs * 1000ULL) {
++            powerFSM.trigger(EVENT_WAKE_TIMER);
++            return;
++        }
++
++        // RTC wake is level-triggered. Leave LS before restoring ordinary
++        // digital USER and DIO1 interrupts in lsExit().
++        switch (esp_sleep_get_wakeup_cause()) {
++        case ESP_SLEEP_WAKEUP_EXT1:
++            powerFSM.trigger(EVENT_PRESS);
++            return;
++        case ESP_SLEEP_WAKEUP_EXT0:
++            powerFSM.trigger(EVENT_WAKE_TIMER);
++            return;
++        case ESP_SLEEP_WAKEUP_UART:
++            powerFSM.trigger(EVENT_SERIAL_CONNECTED);
++            return;
++        default:
++            break;
++        }
++        return;
++    }
++#endif
++
+ #ifdef ARCH_ESP32
+ 
+     // Do we have more sleeping to do?
+@@ -158,6 +208,19 @@ static void lsIdle()
+ 
+ static void lsExit()
+ {
++#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
++    if (pxlDynamicSession) {
++        esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
++        if (!setPxlDynamicLightSleep(false))
++            LOG_ERROR("PXL PM lock could not be reacquired after wake");
++        pxlDynamicSession = false;
++        // The RTC wake may consume DIO1's rising edge. The radio chip keeps
++        // RX_DONE latched, so ask the existing RadioLib backup path now.
++        if (cause == ESP_SLEEP_WAKEUP_EXT0 && RadioLibInterface::instance)
++            RadioLibInterface::instance->pollMissedIrqs();
++        statusLEDModule->setPowerLED(true);
++    }
++#endif
+     LOG_POWERFSM("State: lsExit");
+ }
+ 
+@@ -265,6 +328,9 @@ Fsm powerFSM(&stateBOOT);
+ 
+ void PowerFSM_setup()
+ {
++#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
++    initPxlDynamicLightSleep();
++#endif
+     bool isRouter = ((config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
+                       config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE)
+                          ? 1
+diff --git a/src/sleep.cpp b/src/sleep.cpp
+index 64bd0c4..18995fd 100644
+--- a/src/sleep.cpp
++++ b/src/sleep.cpp
+@@ -370,6 +370,149 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
+ }
+ 
+ #ifdef ARCH_ESP32
++#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
++static esp_pm_lock_handle_t pxlLightSleepLock;
++static bool pxlLightSleepReady;
++static bool pxlLightSleepAllowed;
++
++static gpio_num_t pxlButtonPin()
++{
++    return (gpio_num_t)(config.device.button_gpio ? config.device.button_gpio : BUTTON_PIN);
++}
++
++static void clearPxlLightSleepWake()
++{
++    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT1);
++    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT0);
++    rtc_gpio_hold_dis(pxlButtonPin());
++    rtc_gpio_deinit(pxlButtonPin());
++#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC)
++    rtc_gpio_hold_dis((gpio_num_t)LORA_DIO1);
++    rtc_gpio_deinit((gpio_num_t)LORA_DIO1);
++#endif
++}
++
++bool initPxlDynamicLightSleep()
++{
++#if defined(CONFIG_PM_ENABLE) && defined(CONFIG_FREERTOS_USE_TICKLESS_IDLE)
++    if (pxlLightSleepReady)
++        return true;
++
++    esp_err_t err = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "pxl-v3", &pxlLightSleepLock);
++    if (err != ESP_OK) {
++        LOG_ERROR("PXL PM lock create failed: %d", err);
++        return false;
++    }
++    err = esp_pm_lock_acquire(pxlLightSleepLock);
++    if (err != ESP_OK) {
++        LOG_ERROR("PXL PM lock acquire failed: %d", err);
++        esp_pm_lock_delete(pxlLightSleepLock);
++        pxlLightSleepLock = nullptr;
++        return false;
++    }
++
++    esp_pm_config_esp32_t pmConfig = {};
++    // Match Meshtastic's later setCPUFast(false) call; change sleep policy,
++    // not the normal Heltec V3 CPU frequency.
++    pmConfig.max_freq_mhz = 80;
++    pmConfig.min_freq_mhz = 80;
++#if HAS_WIFI && !MESHTASTIC_EXCLUDE_WIFI
++    if (isWifiAvailable()) {
++        pmConfig.max_freq_mhz = 240;
++        pmConfig.min_freq_mhz = pmConfig.max_freq_mhz;
++    }
++#endif
++    pmConfig.light_sleep_enable = true;
++    err = esp_pm_configure(&pmConfig);
++    if (err != ESP_OK) {
++        LOG_ERROR("PXL PM configure failed: %d", err);
++        esp_pm_lock_release(pxlLightSleepLock);
++        esp_pm_lock_delete(pxlLightSleepLock);
++        pxlLightSleepLock = nullptr;
++        return false;
++    }
++
++    pxlLightSleepReady = true;
++    LOG_INFO("PXL PM configured: CPU %d-%d MHz, automatic light sleep permitted", pmConfig.min_freq_mhz, pmConfig.max_freq_mhz);
++    return true;
++#else
++    LOG_ERROR("PXL PM unavailable: framework lacks PM or tickless idle");
++    return false;
++#endif
++}
++
++bool pxlDynamicLightSleepAvailable()
++{
++    return pxlLightSleepReady;
++}
++
++bool setPxlDynamicLightSleep(bool allow)
++{
++    if (!pxlLightSleepReady)
++        return false;
++    if (allow == pxlLightSleepAllowed)
++        return true;
++
++    if (allow) {
++        if (!rtc_gpio_is_valid_gpio(pxlButtonPin())
++#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC)
++            || !rtc_gpio_is_valid_gpio((gpio_num_t)LORA_DIO1)
++#endif
++        ) {
++            LOG_ERROR("PXL wake pins must support RTC wake");
++            return false;
++        }
++
++        notifyLightSleep.notifyObservers(nullptr); // Detach the regular USER ISR.
++        esp_err_t err = rtc_gpio_pullup_en(pxlButtonPin());
++        if (err == ESP_OK)
++            err = rtc_gpio_hold_en(pxlButtonPin());
++        if (err == ESP_OK)
++            err = esp_sleep_enable_ext1_wakeup(1ULL << pxlButtonPin(), ESP_EXT1_WAKEUP_ANY_LOW);
++        if (err != ESP_OK) {
++            LOG_ERROR("PXL USER RTC wake setup failed: %d", err);
++            clearPxlLightSleepWake();
++            notifyLightSleepEnd.notifyObservers(ESP_SLEEP_WAKEUP_UNDEFINED);
++            return false;
++        }
++#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC)
++        err = rtc_gpio_pulldown_en((gpio_num_t)LORA_DIO1);
++        if (err == ESP_OK)
++            err = rtc_gpio_hold_en((gpio_num_t)LORA_DIO1);
++        if (err == ESP_OK)
++            err = esp_sleep_enable_ext0_wakeup((gpio_num_t)LORA_DIO1, HIGH);
++        if (err != ESP_OK) {
++            LOG_ERROR("PXL LoRa RTC wake setup failed: %d", err);
++            clearPxlLightSleepWake();
++            notifyLightSleepEnd.notifyObservers(ESP_SLEEP_WAKEUP_UNDEFINED);
++            return false;
++        }
++#endif
++        console->flush();
++        err = esp_pm_lock_release(pxlLightSleepLock);
++        if (err != ESP_OK) {
++            LOG_ERROR("PXL PM lock release failed: %d", err);
++            clearPxlLightSleepWake();
++            notifyLightSleepEnd.notifyObservers(ESP_SLEEP_WAKEUP_UNDEFINED);
++            return false;
++        }
++        pxlLightSleepAllowed = true;
++        return true;
++    }
++
++    esp_err_t err = esp_pm_lock_acquire(pxlLightSleepLock);
++    if (err != ESP_OK) {
++        LOG_ERROR("PXL PM lock reacquire failed: %d", err);
++        return false;
++    }
++    pxlLightSleepAllowed = false;
++    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
++    clearPxlLightSleepWake();
++    notifyLightSleepEnd.notifyObservers(cause);
++    return true;
++}
++#endif
++
+ /**
+  * enter light sleep (preserves ram but stops everything about CPU).
+  *
+diff --git a/src/sleep.h b/src/sleep.h
+index f780fb3..41317fc 100644
+--- a/src/sleep.h
++++ b/src/sleep.h
+@@ -10,6 +10,12 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb),
+ #include "esp_sleep.h"
+ esp_sleep_wakeup_cause_t doLightSleep(uint64_t msecToWake);
+ 
++#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
++bool initPxlDynamicLightSleep();
++bool pxlDynamicLightSleepAvailable();
++bool setPxlDynamicLightSleep(bool allow);
++#endif
++
+ extern esp_sleep_source_t wakeCause;
+ #endif
+ 
+diff --git a/variants/esp32s3/heltec_v3/platformio.ini b/variants/esp32s3/heltec_v3/platformio.ini
+--- a/variants/esp32s3/heltec_v3/platformio.ini
++++ b/variants/esp32s3/heltec_v3/platformio.ini
+@@ -18,3 +18,4 @@ build_flags =
+   ${esp32s3_base.build_flags}
+   -D HELTEC_V3
++  -D PXL_HELTEC_V3_DYNAMIC_SLEEP
+   -I variants/esp32s3/heltec_v3

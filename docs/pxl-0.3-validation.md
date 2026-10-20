@@ -12,7 +12,7 @@ was available for this validation.
 | Official tag and retained PXL 0.2 display patch | Local build and manual Actions baseline passed |
 | PM-capable Arduino 2.x framework, ESP32-S3 | `CONFIG_PM_ENABLE=y` and `CONFIG_FREERTOS_USE_TICKLESS_IDLE=y` verified; local build and [manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/38999865180) passed |
 | Checksum-verified archive used by compiler | [Manual Actions run](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39001031077) passed after PlatformIO installed the downloaded and SHA-256-checked local archive |
-| Full PXL 0.3 dynamic sleep patch | Experimental local compile passed, but review found unsafe wake and ISR behavior; patch is excluded from the branch workflow |
+| Full PXL 0.3 dynamic sleep patch | An initial GPIO-wake draft compiled but failed ISR review. A second RTC EXT0/EXT1 prototype also compiles and applies to the exact official tag; unresolved runtime risks keep it out of the branch workflow |
 | Heltec V3 short USER press with screen off | A board-guarded source patch queues the frame change after screen-on; [manual Actions run 39093316580](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39093316580) compiled and packaged it. Device behavior is pending |
 | Heltec V3 USER polling after ordinary Light Sleep | Candidate schedules an immediate OneButton poll and prevents the current loop from delaying if USER is still held after the regular ISR is reattached. [Manual Actions run 39094022238](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39094022238) compiled the final revision; device behavior is pending |
 | Normal application update image | PM-only CI artifact contains distinct `PXL.2-update.bin` (2,137,296 bytes, SHA-256 `bb14fd2588461a3a6c1f8e2cde253272c07f9edf71c71de332ea299e08e93649`) and factory image; both checksum files match. PXL 0.3 pending |
@@ -54,6 +54,43 @@ This inventory is selective by design: the [M1NL proposal](https://github.com/me
 targets another firmware revision, and [PR #11702](https://github.com/meshtastic/firmware/pull/11702)
 is a draft against later `develop`. Copying either entire tree would replace
 the required official 2.7.26 base.
+
+## RTC prototype built locally
+
+`patches/heltec-v3-dynamic-sleep.patch` is an **experimental source patch**,
+not part of the manual Actions build or the downloadable update artifact. It
+uses the verified PM-capable Arduino 2.x framework, RTC EXT1 active-low wake
+for USER GPIO0, and RTC EXT0 active-high wake for DIO1 GPIO14. It restores
+only these two RTC pins, reattaches the normal button ISR, and calls the
+official `RadioLibInterface::pollMissedIrqs()` after an EXT0 wake to check a
+latched RX_DONE. It leaves radio protocol and IRQ flag definitions unchanged.
+
+The patch passed `git apply --check` against the official tag, including after
+the separate framework pin. Local PlatformIO Heltec V3 builds passed for the
+initial RTC version (329.42 seconds), immediate RX_DONE polling (90.41
+seconds), and a guard that refuses sleep during an active LoRa transmission
+(85.52 seconds). The final prototype generated an application image of
+2,140,928 bytes and a factory image of 2,206,464 bytes under ignored local
+`work/`. These are compile results, not runtime validation or a PXL 0.3
+release.
+
+Remaining source-level questions before connecting this patch to Actions:
+
+- Meshtastic's power FSM runs on a roughly 100 ms scheduled callback. A brief
+  USER press may be released before it handles the RTC wake. The wake reason
+  can turn on the screen, but the OneButton classifier cannot reconstruct a
+  missed press/release pair or reliably distinguish it from a multi-press.
+- `esp_sleep_get_wakeup_cause()` may retain a previous wake reason when PM
+  does not actually enter automatic sleep. The RTC prototype needs a reliable
+  per-cycle wake indication before reacting to repeated EXT0/EXT1 reasons.
+- The candidate vetoes sleep while RadioLib reports an active transmission;
+  its immediate radio backup handles a latched RX_DONE. It does not prove that
+  TX_DONE races, consecutive packets, Bluetooth reconnection, or serial API
+  work through this sleep path. The wake-to-dispatch latency needs a board
+  trace.
+- The PM lock and RTC configuration error paths need a target-board fail-awake
+  check. USB and battery runs may behave differently because other PM locks
+  can suppress automatic sleep.
 
 ## Device test gate
 
