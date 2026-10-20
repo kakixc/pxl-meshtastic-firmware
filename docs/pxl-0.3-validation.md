@@ -15,7 +15,7 @@ was available for this validation.
 | Full PXL 0.3 dynamic sleep patch | An initial GPIO-wake draft compiled but failed ISR review. A second RTC EXT0/EXT1 prototype also compiles and applies to the exact official tag; unresolved runtime risks keep it out of the branch workflow |
 | Heltec V3 short USER press with screen off | A board-guarded source patch queues the frame change after screen-on; [manual Actions run 39093316580](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39093316580) compiled and packaged it. Device behavior is pending |
 | Heltec V3 USER polling after ordinary Light Sleep | Candidate schedules an immediate OneButton poll and prevents the current loop from delaying if USER is still held after the regular ISR is reattached. [Manual Actions run 39094022238](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39094022238) compiled the final revision; device behavior is pending |
-| Normal application update image | PM-only CI artifact contains distinct `PXL.2-update.bin` (2,137,296 bytes, SHA-256 `bb14fd2588461a3a6c1f8e2cde253272c07f9edf71c71de332ea299e08e93649`) and factory image; both checksum files match. PXL 0.3 pending |
+| Normal application update image | [Latest manual Actions run 39423453321](https://github.com/kakixc/pxl-meshtastic-firmware/actions/runs/39423453321) contains distinct `PXL.2-update.bin` (2,137,440 bytes, SHA-256 `3ab440d36a45860405dab6e8c5d50e3d25fa0c78dd5bb6401dd8f742780ed132`) and factory image; both checksum files match. PXL 0.3 pending |
 | Release publication | None |
 
 Run `39093316580` produced `PXL.2-update.bin` (2,137,360 bytes,
@@ -24,13 +24,21 @@ and a separate factory image (2,202,896 bytes). Both packaged checksum files
 matched the downloaded images. The update is an application image; preserving
 configuration still requires a normal update test on a device.
 
-The latest candidate, run `39094022238` at commit `b9dccae`, produced
+The button candidate, run `39094022238` at commit `b9dccae`, produced
 `PXL.2-update.bin` (2,137,408 bytes, SHA-256
 `1e56618f4c780f29808c42b1d05035a77f3a99d0de5f90163871f091948084d3`)
 and a separate factory image (2,202,944 bytes, SHA-256
 `aa53b4183c441d52e2ec7b2008b4e64902273d1990f4a4f755aa2a2bb33a247f`).
 Both matched their packaged checksum files. Neither image enables automatic
 light sleep or proves the button behavior on hardware.
+
+The latest branch build, run `39423453321` at commit `1866fe1`, produced
+`PXL.2-update.bin` (2,137,440 bytes, SHA-256
+`3ab440d36a45860405dab6e8c5d50e3d25fa0c78dd5bb6401dd8f742780ed132`)
+and a separate factory image (2,202,976 bytes, SHA-256
+`866e21676c590b3fc8ccb4e6447e688f034c099ce479eefef9713564b803f497`).
+The downloaded checksum files matched. It includes the PXL STATUS width
+guard but not Dynamic Light Sleep.
 
 The build targets only `heltec-v3`. The PM framework is pinned through that
 board's PlatformIO configuration. The official Meshtastic radio protocol,
@@ -73,6 +81,8 @@ seconds), and a guard that refuses sleep during an active LoRa transmission
 2,140,928 bytes and a factory image of 2,206,464 bytes under ignored local
 `work/`. A fourth local build with a 25 ms power-FSM interval in LS also
 passed in 178.65 seconds and generated a 2,140,944-byte application image.
+The RTC level-guard revision also compiled in 263.30 seconds and generated a
+2,141,120-byte application image; it has not been packaged by Actions.
 These are compile results, not runtime validation or a PXL 0.3 release.
 
 Remaining source-level questions before connecting this patch to Actions:
@@ -215,6 +225,12 @@ not prove equivalent power use. Lowering the minimum needs UART, radio timing,
 Bluetooth, and current tests on the target board; it is not a safe numerical
 change to make from a compiler result alone.
 
+The tracked RTC prototype now requires the current USER GPIO0 or DIO1 GPIO14
+level to match EXT1/EXT0 before acting on a stored wake cause. It applied to a
+fresh exact-tag checkout and compiled locally in 263.30 seconds. This narrows
+false wake handling; it cannot recover a short USER press already released or
+establish that RX_DONE is reliably handled after repeated radio wakes.
+
 ## PXL display patch review
 
 The retained PXL 0.2 patcher compiles on the exact official tag and keeps the
@@ -266,6 +282,13 @@ poll for missed RX_DONE interrupts. PXL 0.3 leaves those mechanisms unchanged.
 The Dynamic Light Sleep prototype can plausibly lose or delay an RX_DONE wake;
 that would appear to users as worse delivery through hops even though the
 routing code is untouched.
+
+The official default hop limit is `HOP_RELIABLE` (3), with a hard maximum of
+7. Blindly raising it can add rebroadcast airtime and congestion, so the first
+practical improvement is to identify the failing hop with traceroute and check
+relay role/rebroadcast settings. A useful PXL-only feature would summarize
+recent route/SNR and ACK failures on a diagnostic screen using existing packet
+metadata, without changing how packets are sent.
 
 Use at least three nodes (source, relay, destination) and compare official
 2.7.26, PXL 0.2, and the PXL 0.3 candidate with identical channel, role,

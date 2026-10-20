@@ -1,5 +1,5 @@
 diff --git a/src/PowerFSM.cpp b/src/PowerFSM.cpp
-index b11f37c..d4d8dac 100644
+index b11f37c..d4759c0 100644
 --- a/src/PowerFSM.cpp
 +++ b/src/PowerFSM.cpp
 @@ -12,6 +12,7 @@
@@ -21,7 +21,7 @@ index b11f37c..d4d8dac 100644
  
  static void lsEnter()
  {
-@@ -96,6 +101,51 @@ static void lsIdle()
+@@ -96,6 +101,48 @@ static void lsIdle()
  {
      // LOG_INFO("lsIdle begin ls_secs=%u", getPref_ls_secs());
  
@@ -53,15 +53,12 @@ index b11f37c..d4d8dac 100644
 +
 +        // RTC wake is level-triggered. Leave LS before restoring ordinary
 +        // digital USER and DIO1 interrupts in lsExit().
-+        switch (esp_sleep_get_wakeup_cause()) {
++        switch (pxlDynamicLightSleepWakeCause()) {
 +        case ESP_SLEEP_WAKEUP_EXT1:
 +            powerFSM.trigger(EVENT_PRESS);
 +            return;
 +        case ESP_SLEEP_WAKEUP_EXT0:
 +            powerFSM.trigger(EVENT_WAKE_TIMER);
-+            return;
-+        case ESP_SLEEP_WAKEUP_UART:
-+            powerFSM.trigger(EVENT_SERIAL_CONNECTED);
 +            return;
 +        default:
 +            break;
@@ -73,7 +70,7 @@ index b11f37c..d4d8dac 100644
  #ifdef ARCH_ESP32
  
      // Do we have more sleeping to do?
-@@ -158,6 +208,19 @@ static void lsIdle()
+@@ -158,6 +205,19 @@ static void lsIdle()
  
  static void lsExit()
  {
@@ -93,7 +90,7 @@ index b11f37c..d4d8dac 100644
      LOG_POWERFSM("State: lsExit");
  }
  
-@@ -265,6 +328,9 @@ Fsm powerFSM(&stateBOOT);
+@@ -265,6 +325,9 @@ Fsm powerFSM(&stateBOOT);
  
  void PowerFSM_setup()
  {
@@ -139,10 +136,10 @@ index 135f532..914b890 100644
 \ No newline at end of file
 +} // namespace concurrency
 diff --git a/src/sleep.cpp b/src/sleep.cpp
-index 64bd0c4..18995fd 100644
+index 64bd0c4..5f2fc3e 100644
 --- a/src/sleep.cpp
 +++ b/src/sleep.cpp
-@@ -370,6 +370,149 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
+@@ -370,6 +370,166 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
  }
  
  #ifdef ARCH_ESP32
@@ -222,6 +219,23 @@ index 64bd0c4..18995fd 100644
 +    return pxlLightSleepReady;
 +}
 +
++esp_sleep_wakeup_cause_t pxlDynamicLightSleepWakeCause()
++{
++    if (!pxlLightSleepAllowed)
++        return ESP_SLEEP_WAKEUP_UNDEFINED;
++
++    // IDF retains the previous wake cause even if automatic sleep did not
++    // happen in this scheduler interval. Require an asserted RTC wake pin.
++    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
++    if (cause == ESP_SLEEP_WAKEUP_EXT1 && rtc_gpio_get_level(pxlButtonPin()) == 0)
++        return cause;
++#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC)
++    if (cause == ESP_SLEEP_WAKEUP_EXT0 && rtc_gpio_get_level((gpio_num_t)LORA_DIO1) != 0)
++        return cause;
++#endif
++    return ESP_SLEEP_WAKEUP_UNDEFINED;
++}
++
 +bool setPxlDynamicLightSleep(bool allow)
 +{
 +    if (!pxlLightSleepReady)
@@ -293,22 +307,30 @@ index 64bd0c4..18995fd 100644
   * enter light sleep (preserves ram but stops everything about CPU).
   *
 diff --git a/src/sleep.h b/src/sleep.h
-index f780fb3..41317fc 100644
+index f780fb3..3b48ed1 100644
 --- a/src/sleep.h
 +++ b/src/sleep.h
-@@ -10,6 +10,12 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb),
+@@ -10,6 +10,13 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb),
  #include "esp_sleep.h"
  esp_sleep_wakeup_cause_t doLightSleep(uint64_t msecToWake);
  
 +#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
 +bool initPxlDynamicLightSleep();
 +bool pxlDynamicLightSleepAvailable();
++esp_sleep_wakeup_cause_t pxlDynamicLightSleepWakeCause();
 +bool setPxlDynamicLightSleep(bool allow);
 +#endif
 +
  extern esp_sleep_source_t wakeCause;
  #endif
  
+@@ -52,4 +59,4 @@ void enableModemSleep();
+ #ifdef ARCH_ESP32
+ void enableLoraInterrupt();
+ bool shouldLoraWake(uint32_t msecToWake);
+-#endif
+\ No newline at end of file
++#endif
 diff --git a/variants/esp32s3/heltec_v3/platformio.ini b/variants/esp32s3/heltec_v3/platformio.ini
 --- a/variants/esp32s3/heltec_v3/platformio.ini
 +++ b/variants/esp32s3/heltec_v3/platformio.ini
