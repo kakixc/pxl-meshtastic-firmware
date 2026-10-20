@@ -12,14 +12,27 @@ an artifact from the official Meshtastic `v2.7.26.54e0d8d` tag. This is a
 development build; power consumption and button wake behavior require tests
 on a physical Heltec V3 before release.
 
-Current feature-branch artifacts retain PXL 0.2 UI and use a PM-capable
-Arduino framework, but **do not enable Dynamic Light Sleep**. Review found
-that the initial wake configuration could alter USER and LoRa interrupts.
-The branch also contains Heltec V3-only candidates to advance the OLED frame
+The feature-branch workflow defaults to a PXL 0.2 image with a PM-capable
+Arduino framework and **without Dynamic Light Sleep**. A manual
+`experimental_dynamic_sleep` input builds a separately named PXL 0.3
+experimental artifact with the RTC wake prototype. This option does not
+publish a release and has only passed compilation. The branch also contains
+Heltec V3-only candidates to advance the OLED frame
 on a short USER press that wakes an off screen and to poll USER promptly after
 ordinary Light Sleep; hardware validation is pending.
-PXL 0.3 runtime power saving remains under investigation; do not treat the
-current artifact as a finished PXL 0.3 firmware.
+PXL 0.3 runtime power saving remains under investigation. See
+[`docs/pxl-0.3-validation.md`](docs/pxl-0.3-validation.md) for known wake and
+radio risks and the required device tests.
+
+To request the experimental image manually from this branch:
+
+```text
+gh workflow run build.yml --ref feature/pxl-0.3-low-power -f experimental_dynamic_sleep=true
+```
+
+The resulting `PXL.3-experimental-update.bin` is a normal application image,
+separate from the factory image. Configuration retention still needs a real
+update test on Heltec V3; no final PXL 0.3 release is published automatically.
 
 ## PXL changes
 
