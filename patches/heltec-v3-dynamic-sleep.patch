@@ -103,6 +103,41 @@ index b11f37c..d4d8dac 100644
      bool isRouter = ((config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
                        config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE)
                           ? 1
+diff --git a/src/PowerFSMThread.h b/src/PowerFSMThread.h
+index 135f532..914b890 100644
+--- a/src/PowerFSMThread.h
++++ b/src/PowerFSMThread.h
+@@ -6,6 +6,10 @@
+ #include "main.h"
+ #include "power.h"
+ 
++#if defined(PXL_HELTEC_V3_DYNAMIC_SLEEP) && !MESHTASTIC_EXCLUDE_POWER_FSM
++extern State stateLS;
++#endif
++
+ namespace concurrency
+ {
+ /// Wrapper to convert our powerFSM stuff into a 'thread'
+@@ -35,6 +39,12 @@ class PowerFSMThread : public OSThread
+             powerFSM.trigger(EVENT_SHUTDOWN);
+         }
+ 
++#ifdef PXL_HELTEC_V3_DYNAMIC_SLEEP
++        // Poll the wake cause while in RTC sleep. This bounds the nominal
++        // detection interval without changing other boards or power states.
++        if (state == &stateLS)
++            return 25;
++#endif
+         return 100;
+ #else
+         return INT32_MAX;
+@@ -42,4 +52,4 @@ class PowerFSMThread : public OSThread
+     }
+ };
+ 
+-} // namespace concurrency
+\ No newline at end of file
++} // namespace concurrency
 diff --git a/src/sleep.cpp b/src/sleep.cpp
 index 64bd0c4..18995fd 100644
 --- a/src/sleep.cpp

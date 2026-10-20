@@ -71,8 +71,9 @@ initial RTC version (329.42 seconds), immediate RX_DONE polling (90.41
 seconds), and a guard that refuses sleep during an active LoRa transmission
 (85.52 seconds). The final prototype generated an application image of
 2,140,928 bytes and a factory image of 2,206,464 bytes under ignored local
-`work/`. These are compile results, not runtime validation or a PXL 0.3
-release.
+`work/`. A fourth local build with a 25 ms power-FSM interval in LS also
+passed in 178.65 seconds and generated a 2,140,944-byte application image.
+These are compile results, not runtime validation or a PXL 0.3 release.
 
 Remaining source-level questions before connecting this patch to Actions:
 
@@ -80,6 +81,10 @@ Remaining source-level questions before connecting this patch to Actions:
   USER press may be released before it handles the RTC wake. The wake reason
   can turn on the screen, but the OneButton classifier cannot reconstruct a
   missed press/release pair or reliably distinguish it from a multi-press.
+- The current experimental patch schedules the power FSM every 25 ms while
+  Heltec V3 is in its light-sleep state, leaving other states at 100 ms.
+  This narrows the nominal wake-handling window but increases periodic CPU
+  activity. Its effect on current draw and very short presses is unmeasured.
 - `esp_sleep_get_wakeup_cause()` may retain a previous wake reason when PM
   does not actually enter automatic sleep. The RTC prototype needs a reliable
   per-cycle wake indication before reacting to repeated EXT0/EXT1 reasons.
